@@ -1,0 +1,164 @@
+# Remote compose file — pulls pre-built images from ghcr.io instead of building.
+# Usage: docker compose -f docker-compose.remote.yml up -d
+
+services:
+  sead-core:
+    image: ghcr.io/stardome-technology/stardome-sead/sead-core:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - sead_data:/data
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SERVICE_NAME=sead-core
+    command: ["sead-core", "--port", "8080", "--db", "/data/sead.db"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - sead-network
+
+  edge-service:
+    image: ghcr.io/stardome-technology/stardome-sead/edge-service:latest
+    ports:
+      - "8081:8081"
+    volumes:
+      - sead_data:/data
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SERVICE_NAME=edge-service
+      - EDGE_ORG_ID=${EDGE_ORG_ID:?error}
+      - EDGE_ID=${EDGE_ID:?error}
+      - EDGE_SIGNING_KEY=${EDGE_SIGNING_KEY:-}
+      - EDGE_ORG_SIGNING_KEY=${EDGE_ORG_SIGNING_KEY:-}
+      - EDGE_ORG_PUBLIC_KEY=${EDGE_ORG_PUBLIC_KEY:-}
+      - EDGE_TOKEN_TTL=${EDGE_TOKEN_TTL:-300}
+      - EDGE_STORAGE_GATEWAY_URL=${EDGE_STORAGE_GATEWAY_URL:-http://storage-gateway:8082}
+      - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-30}
+      - EDGE_COMMIT_STRATEGY=${EDGE_COMMIT_STRATEGY:-single}
+      - EDGE_BATCH_FLUSH_INTERVAL_SEC=${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}
+    command: ["edge-service", "--port", "8081", "--db", "/data/edge.db",
+              "--org-id", "${EDGE_ORG_ID:?error}",
+              "--edge-id", "${EDGE_ID:?error}",
+              "--signing-key", "${EDGE_SIGNING_KEY}",
+              "--org-signing-key", "${EDGE_ORG_SIGNING_KEY}",
+              "--org-public-key", "${EDGE_ORG_PUBLIC_KEY}",
+              "--token-ttl", "${EDGE_TOKEN_TTL:-300}",
+              "--storage-gateway-url", "${EDGE_STORAGE_GATEWAY_URL:-http://storage-gateway:8082}",
+              "--watchdog-interval", "${EDGE_WATCHDOG_INTERVAL_SEC:-30}",
+              "--commit-strategy", "${EDGE_COMMIT_STRATEGY:-single}",
+              "--batch-flush-interval", "${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}"]
+    depends_on:
+      sead-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - sead-network
+
+  storage-gateway:
+    image: ghcr.io/stardome-technology/stardome-sead/storage-gateway:latest
+    ports:
+      - "8082:8082"
+    volumes:
+      - sead_data:/data
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SERVICE_NAME=storage-gateway
+      - IPFS_API_BASE_URL=${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud}
+    command: ["storage-gateway", "--port", "8082", "--db", "/data/storage.db",
+              "--ipfs-url", "${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud}"]
+    depends_on:
+      sead-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - sead-network
+
+  auth-service:
+    image: ghcr.io/stardome-technology/stardome-sead/auth-service:latest
+    ports:
+      - "8083:8083"
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SERVICE_NAME=auth-service
+      - AUTH_SEAD_CORE_BASE_URL=http://sead-core:8080
+      - AUTH_SKEW_TOLERANCE_SEC=${AUTH_SKEW_TOLERANCE_SEC:-30}
+      - AUTH_KEY_CACHE_TTL_SEC=${AUTH_KEY_CACHE_TTL_SEC:-60}
+    command: ["auth-service", "--port", "8083",
+              "--sead-core-url", "http://sead-core:8080",
+              "--skew-tolerance", "${AUTH_SKEW_TOLERANCE_SEC:-30}",
+              "--cache-ttl", "${AUTH_KEY_CACHE_TTL_SEC:-60}"]
+    depends_on:
+      sead-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - sead-network
+
+  verifier-service:
+    image: ghcr.io/stardome-technology/stardome-sead/verifier-service:latest
+    ports:
+      - "8084:8084"
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SERVICE_NAME=verifier-service
+      - VERIFIER_SEAD_CORE_BASE_URL=http://sead-core:8080
+      - VERIFIER_STORAGE_BASE_URL=http://storage-gateway:8082
+      - VERIFIER_SOURCE_DATA_BASE_URL=${VERIFIER_SOURCE_DATA_BASE_URL:-http://source-data-service:8085}
+    command: ["verifier-service", "--port", "8084",
+              "--sead-core-url", "http://sead-core:8080",
+              "--storage-url", "http://storage-gateway:8082",
+              "--source-data-url", "${VERIFIER_SOURCE_DATA_BASE_URL:-http://source-data-service:8085}"]
+    depends_on:
+      sead-core:
+        condition: service_healthy
+      storage-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - sead-network
+
+  source-data-service:
+    image: ghcr.io/stardome-technology/stardome-sead/source-data-service:latest
+    ports:
+      - "8085:8085"
+    volumes:
+      - sead_data:/data
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SERVICE_NAME=source-data-service
+      - SOURCE_DATA_TRUSTED_VERIFIERS=${SOURCE_DATA_TRUSTED_VERIFIERS:-}
+    command: ["source-data-service", "--port", "8085", "--db", "/data/sourcedata.db",
+              "--trusted-verifiers", "${SOURCE_DATA_TRUSTED_VERIFIERS:-}"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8085/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - sead-network
+
+volumes:
+  sead_data:
+
+networks:
+  sead-network:
+    driver: bridge
