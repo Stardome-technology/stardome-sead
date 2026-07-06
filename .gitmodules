@@ -1,6 +1,0 @@
-[submodule "third_party/xkcp"]
-	path = third_party/xkcp
-	url = https://github.com/XKCP/XKCP
-[submodule "third_party/xmss-reference"]
-	path = third_party/xmss-reference
-	url = https://github.com/Stardome-technology/xmss-reference
