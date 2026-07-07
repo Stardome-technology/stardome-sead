@@ -3,6 +3,10 @@
 **SEAD** — Stardome Edge Accountability DAG. A tamper-evident event
 log for edge device accountability, built on XMSS post-quantum signatures.
 
+This guide walks you through deploying a SEAD instance: generate keys,
+start the stack, register your organization, authorize an edge, and
+produce tokens for IPFS pinning.
+
 ## Architecture
 
 - **sead-core** — event store, DAG maintenance, org/edge key resolution
@@ -12,42 +16,46 @@ log for edge device accountability, built on XMSS post-quantum signatures.
 - **verifier-service** — independent verification of event chains
 - **source-data-service** — controlled disclosure of source data
 
-## Source repos
+---
 
-Source code is developed in private repositories. Pre-built Docker images
-are published here for deployment.
+## Step 1 — Generate keys
 
-## Deploy
-
-### Prerequisites
-
-- Docker + Docker Compose plugin
-- XMSS keypair for your edge device and organization (generate one with
-  the keygen Docker image — see below)
-
-### Key generation
+Run on a **secure, offline laptop**. The org signing key is the root of
+trust — never store it on a server, never commit it to git, never
+transmit it over the network.
 
 ```bash
 # Pull the keygen image (public, no auth needed)
 docker pull ghcr.io/stardome-technology/stardome-sead/keygen:latest
 
-# Generate an edge DAG signing key (default: XMSS-SHAKE_20_256)
-docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label edge
-
-# Generate an organization key (separate from edge key, used for auth tokens)
+# Generate an organization keypair (used for auth tokens)
 docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label org
+
+# Generate an edge DAG signing keypair
+# (separate from the org key — edge signs commits, org signs tokens)
+docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label edge
 
 # See all supported OIDs and options
 docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --help
 ```
 
-The output includes the hex `ID` (derived from the public key hash), which becomes
-`EDGE_ID` / `EDGE_ORG_ID` in configuration.
+Each run prints `ID`, `SECRET_KEY`, and `PUBLIC_KEY` in hex. Save these
+values — you will need them for configuration and bootstrap.
 
-### Production deploy
+---
+
+## Step 2 — Deploy the stack
+
+### Prerequisites
+
+- Docker + Docker Compose plugin
+- The key values from Step 1
+
+### Configure
+
+Create a `.env` file with your key values:
 
 ```bash
-# Create .env with your XMSS key values
 cat > .env << EOF
 EDGE_ORG_ID=<org_id_hex>
 EDGE_ID=<edge_id_hex>
@@ -55,11 +63,14 @@ EDGE_SIGNING_KEY=<edge_secret_key_hex>
 EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
 EOF
+```
 
-# Pull and run — compose reads .env automatically
+### Start
+
+```bash
 docker compose -f docker-compose.remote.yml up -d
 
-# Health check
+# Verify all services are healthy
 curl http://localhost:8080/health
 ```
 
@@ -86,26 +97,186 @@ curl http://localhost:8080/health
 | `VERIFIER_SOURCE_DATA_BASE_URL` | verifier-service | No | `http://source-data-service:8085` | Source-data URL |
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
 
-## Bootstrap genesis
+---
 
-Before the DAG accepts events, register `OrgGenesis` and `EdgeAuthorization`:
+## Step 3 — Bootstrap genesis
+
+Before the DAG accepts events, register your organization and authorize
+your edge. The easiest way is using the `gen-bootstrap` tool, which
+builds and signs the CBOR envelopes for you.
+
+### Build the tool
+
+```bash
+# From the sead-service repo root
+cmake -B build -DBUILD_TOOLS=ON && cmake --build build -j
+```
+
+### 3a — Register the organization (OrgGenesis)
+
+```bash
+./build/tools/gen-bootstrap org-genesis \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --module-id <module_id_hex> \
+  --module-pk <module_pk_hex> \
+  --module-signature <module_sig_hex>
+```
+
+This outputs a hex string. POST it to sead-core:
 
 ```bash
 curl -X POST http://localhost:8080/events \
   -H "Content-Type: application/json" \
-  -d '{"envelope_hex": "<org_genesis_cbor_hex>"}'
-
-curl -X POST http://localhost:8080/events \
-  -H "Content-Type: application/json" \
-  -d '{"envelope_hex": "<edge_auth_cbor_hex>"}'
+  -d '{"envelope_hex": "<paste hex output here>"}'
 ```
 
-## IPFS auth
+**What's inside the envelope** — the CBOR body is equivalent to this JSON:
 
-For deploying the minimal auth stack alongside an IPFS node, see
-[stardome-ipfs](https://github.com/Stardome-technology/stardome-ipfs).
+```json
+{
+  "org_id": <hex bytes>,
+  "org_pk": <hex bytes>,
+  "not_before": <unix timestamp>,
+  "not_after": <0 or timestamp>,
+  "module_endorsements": [
+    [<module_id_hex>, <module_pk_hex>, <module_sig_hex>]
+  ]
+}
+```
 
-## Explorer
+| CBOR key | Field | Type | Description |
+|----------|-------|------|-------------|
+| `1` | `org_id` | bytes | Organization identifier (SHAKE256 of public key) |
+| `2` | `org_pk` | bytes | Organization's XMSS public key |
+| `3` | `not_before` | unsigned int | Validity start (UNIX epoch seconds) |
+| `4` | `not_after` | unsigned int | Validity end (`0` = no expiry) |
+| `5` | `module_endorsements` | array | Array of `[module_id, module_pk, signature]` |
 
-For a read-only operational dashboard, see
-[stardome-sead-explorer](https://github.com/Stardome-technology/stardome-sead-explorer).
+The envelope is signed by the **org key** (the same keypair being
+registered). This bootstraps the org's identity in the DAG.
+
+### 3b — Authorize the edge (EdgeAuthorization)
+
+```bash
+./build/tools/gen-bootstrap edge-authorization \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --edge-id <edge_id_hex> \
+  --edge-pk <edge_pk_hex>
+```
+
+POST the output hex to sead-core:
+
+```bash
+curl -X POST http://localhost:8080/events \
+  -H "Content-Type: application/json" \
+  -d '{"envelope_hex": "<paste hex output here>"}'
+```
+
+**What's inside** — equivalent JSON:
+
+```json
+{
+  "org_id": <hex bytes>,
+  "edge_id": <hex bytes>,
+  "edge_pk": <hex bytes>,
+  "not_before": <unix timestamp>,
+  "not_after": <0 or timestamp>
+}
+```
+
+| CBOR key | Field | Type | Description |
+|----------|-------|------|-------------|
+| `1` | `org_id` | bytes | Organization identifier |
+| `2` | `edge_id` | bytes | Edge device identifier |
+| `3` | `edge_pk` | bytes | Edge device's XMSS public key |
+| `4` | `not_before` | unsigned int | Authorization start (UNIX epoch seconds) |
+| `5` | `not_after` | unsigned int | Authorization end (`0` = no expiry) |
+
+The envelope is signed by the **org key** (the same one registered in
+step 3a). This proves the org authorizes this edge.
+
+### Envelope structure (both events)
+
+Every event is wrapped in a `SeadEnvelope`. The `gen-bootstrap` tool
+builds this for you, but here is what it contains:
+
+```json
+{
+  "protocol_version": "1.1.2",
+  "event_type": <1 or 10>,
+  "event_id": <32 bytes hex>,
+  "body": <canonical CBOR bytes hex>,
+  "signature": <XMSS signature bytes hex>
+}
+```
+
+| CBOR key | Field | Type | Description |
+|----------|-------|------|-------------|
+| `1` | `protocol_version` | text string | Always `"1.1.2"` |
+| `2` | `event_type` | unsigned int | `1` = OrgGenesis, `10` = EdgeAuthorization |
+| `3` | `event_id` | bytes (32) | SHAKE256 hash of canonical CBOR of the body |
+| `4` | `body` | bytes | Canonical CBOR of the inner event body |
+| `5` | `signature` | bytes | XMSS signature over `{event_type, event_id}` |
+
+### Verify
+
+```bash
+curl http://localhost:8080/orgs/<org_id_hex>
+# Expected: {"status":"active","org_pk_hex":"<pk>"}
+
+curl http://localhost:8080/edges/<org_id_hex>/<edge_id_hex>
+# Expected: {"status":"authorized","edge_pk_hex":"<pk>"}
+```
+
+---
+
+## Step 4 — Generate auth tokens (IPFS pinning)
+
+The auth stack only verifies tokens — it never generates them. You produce
+tokens on the **same secure laptop** from Step 1, using the `gen-token`
+tool. The org signing key never leaves your machine.
+
+```bash
+# Build the gen-token tool (from the sead-service repo)
+cmake -B build -DBUILD_TOOLS=ON && cmake --build build -j
+
+# Generate a token bound to an artifact
+./build/tools/gen-token \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --payload-file artifact.cbor
+
+# Output: a single line of base64url-encoded CBOR
+# Ready for: Authorization: Bearer <token>
+```
+
+### Token structure
+
+See [sead_auth_token_v1.0.0.cddl](https://github.com/Stardome-technology/stardome-cbor-schemes/blob/main/sead_auth_token_v1.0.0.cddl)
+
+| CBOR key | Field | Type | Description |
+|----------|-------|------|-------------|
+| `1` | `org_id` | bytes | Organization identifier |
+| `2` | `scope` | text string | `"ipfs_pin"` |
+| `3` | `expiry` | unsigned int | UNIX timestamp |
+| `4` | `nonce` | bytes (16) | Random challenge |
+| `5` | `signature` | bytes | XMSS signature over fields 1-4 |
+| `8` | `payload_hash` | bytes (32) | (optional) Binds token to a specific artifact |
+
+Token is **base64url-encoded** CBOR (`RFC 4648 §5`, no padding).
+
+---
+
+## Next steps
+
+- **IPFS auth** — Deploy the minimal auth stack alongside an IPFS node:
+  [stardome-ipfs](https://github.com/Stardome-technology/stardome-ipfs)
+- **Explorer** — Read-only operational dashboard:
+  [stardome-sead-explorer](https://github.com/Stardome-technology/stardome-sead-explorer)
+- **Full bootstrap reference** — Detailed CBOR assembly and edge cases:
+  [`docs/bootstrap-genesis.md`](docs/bootstrap-genesis.md)
