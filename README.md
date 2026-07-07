@@ -67,7 +67,10 @@ EOF
 
 ### Start
 
+Pull the latest images, then start the stack:
+
 ```bash
+docker compose -f docker-compose.remote.yml pull
 docker compose -f docker-compose.remote.yml up -d
 
 # Verify all services are healthy
