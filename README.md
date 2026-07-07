@@ -88,17 +88,98 @@ curl http://localhost:8080/health
 
 ## Bootstrap genesis
 
-Before the DAG accepts events, register `OrgGenesis` and `EdgeAuthorization`:
+Before the DAG accepts events, you must register an organization and authorize
+an edge. Events are CBOR structures defined in
+[`sead_v1.1.2.cddl`](https://github.com/Stardome-technology/stardome-cbor-schemes/blob/main/sead_v1.1.2.cddl)
+and sent inside a JSON wrapper:
 
 ```bash
 curl -X POST http://localhost:8080/events \
   -H "Content-Type: application/json" \
-  -d '{"envelope_hex": "<org_genesis_cbor_hex>"}'
-
-curl -X POST http://localhost:8080/events \
-  -H "Content-Type: application/json" \
-  -d '{"envelope_hex": "<edge_auth_cbor_hex>"}'
+  -d '{"envelope_hex": "<hex-encoded-cbor-envelope>"}'
 ```
+
+### Event envelope (outer wrapper)
+
+Every event is wrapped in a `SeadEnvelope`:
+
+| CBOR key | Field | Type | Description |
+|----------|-------|------|-------------|
+| `1` | `protocol_version` | text string | Always `"1.1.2"` |
+| `2` | `event_type` | unsigned int | `1` = OrgGenesis, `10` = EdgeAuthorization |
+| `3` | `event_id` | bytes (32) | SHAKE256 hash of canonical CBOR of the body |
+| `4` | `body` | bytes | Canonical CBOR of the inner event body |
+| `5` | `signature` | bytes | XMSS signature over canonical CBOR of `{event_type, event_id}` |
+
+The `envelope_hex` parameter is the **hex-encoding of the canonical CBOR bytes**
+of this envelope (not a hex of a JSON). See the
+[bootstrap guide](docs/bootstrap-genesis.md) for assembly steps.
+
+### OrgGenesis body (event_type = 1)
+
+Creates an organization with its public key and an initial module endorsement.
+
+| CBOR key | Field | Type | Description |
+|----------|-------|------|-------------|
+| `1` | `org_id` | bytes | Organization identifier (SHAKE256 of public key) |
+| `2` | `org_pk` | bytes | Organization's XMSS public key |
+| `3` | `not_before` | unsigned int | Validity start (UNIX epoch seconds) |
+| `4` | `not_after` | unsigned int | Validity end (`0` = no expiry) |
+| `5` | `module_endorsements` | array | Array of `ModuleEndorsement` objects (see below) |
+
+Each `ModuleEndorsement` is a 3-element array:
+
+| Index | Field | Type | Description |
+|-------|-------|------|-------------|
+| `0` | `module_id` | bytes | Hardware module identifier |
+| `1` | `module_xmss_pk` | bytes | Module's XMSS public key |
+| `2` | `signature` | bytes | Module signature over `(org_id, org_pk, not_before, not_after)` |
+
+The envelope signature must be produced by the **org writer key** — this is
+the same keypair whose public key is being registered. This bootstraps the
+org's identity in the DAG.
+
+### EdgeAuthorization body (event_type = 10)
+
+Authorizes an edge device to publish commits under an existing org.
+
+| CBOR key | Field | Type | Description |
+|----------|-------|------|-------------|
+| `1` | `org_id` | bytes | Organization identifier |
+| `2` | `edge_id` | bytes | Edge device identifier |
+| `3` | `edge_pk` | bytes | Edge device's XMSS public key |
+| `4` | `not_before` | unsigned int | Authorization start (UNIX epoch seconds) |
+| `5` | `not_after` | unsigned int | Authorization end (`0` = no expiry) |
+
+The envelope signature must be produced by the **org key** (the same one
+registered via OrgGenesis). This proves the org authorizes this edge.
+
+### Full procedure
+
+See [`docs/bootstrap-genesis.md`](docs/bootstrap-genesis.md) for the complete
+step-by-step guide including key generation, CBOR assembly, and token
+generation for IPFS pinning.
+
+## Token generation (IPFS pinning)
+
+The org operator generates signed auth tokens on a secure laptop using the
+`gen-token` tool. See [`docs/bootstrap-genesis.md`](docs/bootstrap-genesis.md) →
+**Step 3** for the full reference.
+
+### Auth token structure
+
+See [sead_auth_token_v1.0.0.cddl](https://github.com/Stardome-technology/stardome-cbor-schemes/blob/main/sead_auth_token_v1.0.0.cddl)
+
+CBOR map with:
+- `org_id` — organization identifier
+- `scope` — `"ipfs_pin"`
+- `expiry` — UNIX timestamp
+- `nonce` — random bytes
+- `signature` — XMSS signature over canonical CBOR of fields 1-4
+- `payload_hash` (optional) — binds token to a specific artifact
+
+Token is **base64url-encoded** CBOR (`RFC 4648 §5`, no padding) and passed
+as `Authorization: Bearer <token>`.
 
 ## IPFS auth
 
