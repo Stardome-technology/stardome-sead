@@ -3,6 +3,10 @@
 **SEAD** — Stardome Edge Accountability DAG. A tamper-evident event
 log for edge device accountability, built on XMSS post-quantum signatures.
 
+This guide walks you through deploying a SEAD instance: generate keys,
+start the stack, register your organization, authorize an edge, and
+produce tokens for IPFS pinning.
+
 ## Architecture
 
 - **sead-core** — event store, DAG maintenance, org/edge key resolution
@@ -12,42 +16,46 @@ log for edge device accountability, built on XMSS post-quantum signatures.
 - **verifier-service** — independent verification of event chains
 - **source-data-service** — controlled disclosure of source data
 
-## Source repos
+---
 
-Source code is developed in private repositories. Pre-built Docker images
-are published here for deployment.
+## Step 1 — Generate keys
 
-## Deploy
-
-### Prerequisites
-
-- Docker + Docker Compose plugin
-- XMSS keypair for your edge device and organization (generate one with
-  the keygen Docker image — see below)
-
-### Key generation
+Run on a **secure, offline laptop**. The org signing key is the root of
+trust — never store it on a server, never commit it to git, never
+transmit it over the network.
 
 ```bash
 # Pull the keygen image (public, no auth needed)
 docker pull ghcr.io/stardome-technology/stardome-sead/keygen:latest
 
-# Generate an edge DAG signing key (default: XMSS-SHAKE_20_256)
-docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label edge
-
-# Generate an organization key (separate from edge key, used for auth tokens)
+# Generate an organization keypair (used for auth tokens)
 docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label org
+
+# Generate an edge DAG signing keypair
+# (separate from the org key — edge signs commits, org signs tokens)
+docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label edge
 
 # See all supported OIDs and options
 docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --help
 ```
 
-The output includes the hex `ID` (derived from the public key hash), which becomes
-`EDGE_ID` / `EDGE_ORG_ID` in configuration.
+Each run prints `ID`, `SECRET_KEY`, and `PUBLIC_KEY` in hex. Save these
+values — you will need them for configuration and bootstrap.
 
-### Production deploy
+---
+
+## Step 2 — Deploy the stack
+
+### Prerequisites
+
+- Docker + Docker Compose plugin
+- The key values from Step 1
+
+### Configure
+
+Create a `.env` file with your key values:
 
 ```bash
-# Create .env with your XMSS key values
 cat > .env << EOF
 EDGE_ORG_ID=<org_id_hex>
 EDGE_ID=<edge_id_hex>
@@ -55,11 +63,14 @@ EDGE_SIGNING_KEY=<edge_secret_key_hex>
 EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
 EOF
+```
 
-# Pull and run — compose reads .env automatically
+### Start
+
+```bash
 docker compose -f docker-compose.remote.yml up -d
 
-# Health check
+# Verify all services are healthy
 curl http://localhost:8080/health
 ```
 
@@ -86,38 +97,54 @@ curl http://localhost:8080/health
 | `VERIFIER_SOURCE_DATA_BASE_URL` | verifier-service | No | `http://source-data-service:8085` | Source-data URL |
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
 
-## Bootstrap genesis
+---
 
-Before the DAG accepts events, you must register an organization and authorize
-an edge. Events are CBOR structures defined in
-[`sead_v1.1.2.cddl`](https://github.com/Stardome-technology/stardome-cbor-schemes/blob/main/sead_v1.1.2.cddl)
-and sent inside a JSON wrapper:
+## Step 3 — Bootstrap genesis
+
+Before the DAG accepts events, register your organization and authorize
+your edge. The easiest way is using the `gen-bootstrap` tool, which
+builds and signs the CBOR envelopes for you.
+
+### Build the tool
+
+```bash
+# From the sead-service repo root
+cmake -B build -DBUILD_TOOLS=ON && cmake --build build -j
+```
+
+### 3a — Register the organization (OrgGenesis)
+
+```bash
+./build/tools/gen-bootstrap org-genesis \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --module-id <module_id_hex> \
+  --module-pk <module_pk_hex> \
+  --module-signature <module_sig_hex>
+```
+
+This outputs a hex string. POST it to sead-core:
 
 ```bash
 curl -X POST http://localhost:8080/events \
   -H "Content-Type: application/json" \
-  -d '{"envelope_hex": "<hex-encoded-cbor-envelope>"}'
+  -d '{"envelope_hex": "<paste hex output here>"}'
 ```
 
-### Event envelope (outer wrapper)
+**What's inside the envelope** — the CBOR body is equivalent to this JSON:
 
-Every event is wrapped in a `SeadEnvelope`:
-
-| CBOR key | Field | Type | Description |
-|----------|-------|------|-------------|
-| `1` | `protocol_version` | text string | Always `"1.1.2"` |
-| `2` | `event_type` | unsigned int | `1` = OrgGenesis, `10` = EdgeAuthorization |
-| `3` | `event_id` | bytes (32) | SHAKE256 hash of canonical CBOR of the body |
-| `4` | `body` | bytes | Canonical CBOR of the inner event body |
-| `5` | `signature` | bytes | XMSS signature over canonical CBOR of `{event_type, event_id}` |
-
-The `envelope_hex` parameter is the **hex-encoding of the canonical CBOR bytes**
-of this envelope (not a hex of a JSON). See the
-[bootstrap guide](docs/bootstrap-genesis.md) for assembly steps.
-
-### OrgGenesis body (event_type = 1)
-
-Creates an organization with its public key and an initial module endorsement.
+```json
+{
+  "org_id": <hex bytes>,
+  "org_pk": <hex bytes>,
+  "not_before": <unix timestamp>,
+  "not_after": <0 or timestamp>,
+  "module_endorsements": [
+    [<module_id_hex>, <module_pk_hex>, <module_sig_hex>]
+  ]
+}
+```
 
 | CBOR key | Field | Type | Description |
 |----------|-------|------|-------------|
@@ -125,23 +152,41 @@ Creates an organization with its public key and an initial module endorsement.
 | `2` | `org_pk` | bytes | Organization's XMSS public key |
 | `3` | `not_before` | unsigned int | Validity start (UNIX epoch seconds) |
 | `4` | `not_after` | unsigned int | Validity end (`0` = no expiry) |
-| `5` | `module_endorsements` | array | Array of `ModuleEndorsement` objects (see below) |
+| `5` | `module_endorsements` | array | Array of `[module_id, module_pk, signature]` |
 
-Each `ModuleEndorsement` is a 3-element array:
+The envelope is signed by the **org key** (the same keypair being
+registered). This bootstraps the org's identity in the DAG.
 
-| Index | Field | Type | Description |
-|-------|-------|------|-------------|
-| `0` | `module_id` | bytes | Hardware module identifier |
-| `1` | `module_xmss_pk` | bytes | Module's XMSS public key |
-| `2` | `signature` | bytes | Module signature over `(org_id, org_pk, not_before, not_after)` |
+### 3b — Authorize the edge (EdgeAuthorization)
 
-The envelope signature must be produced by the **org writer key** — this is
-the same keypair whose public key is being registered. This bootstraps the
-org's identity in the DAG.
+```bash
+./build/tools/gen-bootstrap edge-authorization \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --edge-id <edge_id_hex> \
+  --edge-pk <edge_pk_hex>
+```
 
-### EdgeAuthorization body (event_type = 10)
+POST the output hex to sead-core:
 
-Authorizes an edge device to publish commits under an existing org.
+```bash
+curl -X POST http://localhost:8080/events \
+  -H "Content-Type: application/json" \
+  -d '{"envelope_hex": "<paste hex output here>"}'
+```
+
+**What's inside** — equivalent JSON:
+
+```json
+{
+  "org_id": <hex bytes>,
+  "edge_id": <hex bytes>,
+  "edge_pk": <hex bytes>,
+  "not_before": <unix timestamp>,
+  "not_after": <0 or timestamp>
+}
+```
 
 | CBOR key | Field | Type | Description |
 |----------|-------|------|-------------|
@@ -151,42 +196,87 @@ Authorizes an edge device to publish commits under an existing org.
 | `4` | `not_before` | unsigned int | Authorization start (UNIX epoch seconds) |
 | `5` | `not_after` | unsigned int | Authorization end (`0` = no expiry) |
 
-The envelope signature must be produced by the **org key** (the same one
-registered via OrgGenesis). This proves the org authorizes this edge.
+The envelope is signed by the **org key** (the same one registered in
+step 3a). This proves the org authorizes this edge.
 
-### Full procedure
+### Envelope structure (both events)
 
-See [`docs/bootstrap-genesis.md`](docs/bootstrap-genesis.md) for the complete
-step-by-step guide including key generation, CBOR assembly, and token
-generation for IPFS pinning.
+Every event is wrapped in a `SeadEnvelope`. The `gen-bootstrap` tool
+builds this for you, but here is what it contains:
 
-## Token generation (IPFS pinning)
+```json
+{
+  "protocol_version": "1.1.2",
+  "event_type": <1 or 10>,
+  "event_id": <32 bytes hex>,
+  "body": <canonical CBOR bytes hex>,
+  "signature": <XMSS signature bytes hex>
+}
+```
 
-The org operator generates signed auth tokens on a secure laptop using the
-`gen-token` tool. See [`docs/bootstrap-genesis.md`](docs/bootstrap-genesis.md) →
-**Step 3** for the full reference.
+| CBOR key | Field | Type | Description |
+|----------|-------|------|-------------|
+| `1` | `protocol_version` | text string | Always `"1.1.2"` |
+| `2` | `event_type` | unsigned int | `1` = OrgGenesis, `10` = EdgeAuthorization |
+| `3` | `event_id` | bytes (32) | SHAKE256 hash of canonical CBOR of the body |
+| `4` | `body` | bytes | Canonical CBOR of the inner event body |
+| `5` | `signature` | bytes | XMSS signature over `{event_type, event_id}` |
 
-### Auth token structure
+### Verify
+
+```bash
+curl http://localhost:8080/orgs/<org_id_hex>
+# Expected: {"status":"active","org_pk_hex":"<pk>"}
+
+curl http://localhost:8080/edges/<org_id_hex>/<edge_id_hex>
+# Expected: {"status":"authorized","edge_pk_hex":"<pk>"}
+```
+
+---
+
+## Step 4 — Generate auth tokens (IPFS pinning)
+
+The auth stack only verifies tokens — it never generates them. You produce
+tokens on the **same secure laptop** from Step 1, using the `gen-token`
+tool. The org signing key never leaves your machine.
+
+```bash
+# Build the gen-token tool (from the sead-service repo)
+cmake -B build -DBUILD_TOOLS=ON && cmake --build build -j
+
+# Generate a token bound to an artifact
+./build/tools/gen-token \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --payload-file artifact.cbor
+
+# Output: a single line of base64url-encoded CBOR
+# Ready for: Authorization: Bearer <token>
+```
+
+### Token structure
 
 See [sead_auth_token_v1.0.0.cddl](https://github.com/Stardome-technology/stardome-cbor-schemes/blob/main/sead_auth_token_v1.0.0.cddl)
 
-CBOR map with:
-- `org_id` — organization identifier
-- `scope` — `"ipfs_pin"`
-- `expiry` — UNIX timestamp
-- `nonce` — random bytes
-- `signature` — XMSS signature over canonical CBOR of fields 1-4
-- `payload_hash` (optional) — binds token to a specific artifact
+| CBOR key | Field | Type | Description |
+|----------|-------|------|-------------|
+| `1` | `org_id` | bytes | Organization identifier |
+| `2` | `scope` | text string | `"ipfs_pin"` |
+| `3` | `expiry` | unsigned int | UNIX timestamp |
+| `4` | `nonce` | bytes (16) | Random challenge |
+| `5` | `signature` | bytes | XMSS signature over fields 1-4 |
+| `8` | `payload_hash` | bytes (32) | (optional) Binds token to a specific artifact |
 
-Token is **base64url-encoded** CBOR (`RFC 4648 §5`, no padding) and passed
-as `Authorization: Bearer <token>`.
+Token is **base64url-encoded** CBOR (`RFC 4648 §5`, no padding).
 
-## IPFS auth
+---
 
-For deploying the minimal auth stack alongside an IPFS node, see
-[stardome-ipfs](https://github.com/Stardome-technology/stardome-ipfs).
+## Next steps
 
-## Explorer
-
-For a read-only operational dashboard, see
-[stardome-sead-explorer](https://github.com/Stardome-technology/stardome-sead-explorer).
+- **IPFS auth** — Deploy the minimal auth stack alongside an IPFS node:
+  [stardome-ipfs](https://github.com/Stardome-technology/stardome-ipfs)
+- **Explorer** — Read-only operational dashboard:
+  [stardome-sead-explorer](https://github.com/Stardome-technology/stardome-sead-explorer)
+- **Full bootstrap reference** — Detailed CBOR assembly and edge cases:
+  [`docs/bootstrap-genesis.md`](docs/bootstrap-genesis.md)
