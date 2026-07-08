@@ -108,13 +108,6 @@ Before the DAG accepts events, register your organization and authorize
 your edge. The easiest way is using the `gen-bootstrap` tool, which
 builds and signs the CBOR envelopes for you.
 
-### Build the tool
-
-```bash
-# From the sead-service repo root
-cmake -B build -DBUILD_TOOLS=ON && cmake --build build -j
-```
-
 ### 3a — Generate the module endorsement signature
 
 The OrgGenesis event requires a **module endorsement signature**: an XMSS
@@ -131,12 +124,11 @@ exported. You must connect the module via UART and use
 #### Generate the signature
 
 ```bash
-
-
 # Request the module to sign the org-endorsement payload.
 # The 4 values (org_id, org_pk, not_before, not_after) are placed as
 # source-data leaves in the module's Merkle tree. The module signs
 # the tree root and returns the attestation.
+# If using the provided stardome-client on a local Stardome module:
 ./bin/stardome-client --port /dev/ttyUSB0 endorse \
   --org-id <org_id_hex> \
   --org-pk <org_pk_hex> \
