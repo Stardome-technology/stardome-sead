@@ -115,7 +115,48 @@ builds and signs the CBOR envelopes for you.
 cmake -B build -DBUILD_TOOLS=ON && cmake --build build -j
 ```
 
-### 3a — Register the organization (OrgGenesis)
+### 3a — Generate the module endorsement signature
+
+The OrgGenesis event requires a **module endorsement signature**: an XMSS
+signature produced by the Stardome hardware module (SGE/SSP) over the
+CBOR array `[org_id, org_pk, not_before, not_after]`. This proves the
+module's XMSS key is installed in a genuine Stardome device.
+
+The module's XMSS private key lives inside the hardware — it cannot be
+exported. You must connect the module via UART and use
+`stardome-client endorse` to request the signature.
+
+
+
+#### Generate the signature
+
+```bash
+
+
+# Request the module to sign the org-endorsement payload.
+# The 4 values (org_id, org_pk, not_before, not_after) are placed as
+# source-data leaves in the module's Merkle tree. The module signs
+# the tree root and returns the attestation.
+./bin/stardome-client --port /dev/ttyUSB0 endorse \
+  --org-id <org_id_hex> \
+  --org-pk <org_pk_hex> \
+  --not-before <unix_epoch_sec> \
+  --not-after <unix_epoch_sec> \
+  --out-tree module_tree.bin \
+  --out-attestation module_att.bin
+```
+
+The output prints the `merkle_root` hex and `xmss_sig` hex. Use these
+with `gen-bootstrap` in the next step. The `endorse` command reuses the
+standard `FLAG_SIGN` wire path — no firmware changes needed.
+
+> **Note on timestamps:** `--not-before` defaults to current time,
+> `--not-after` defaults to `0` (no expiry). The org admin and module
+> operator must agree on the same timestamps — the values passed here
+> must exactly match the values passed to `gen-bootstrap` in the next
+> step, because the module's Merkle tree commits to them.
+
+### 3b — Register the organization (OrgGenesis)
 
 ```bash
 ./build/tools/gen-bootstrap org-genesis \
@@ -124,7 +165,8 @@ cmake -B build -DBUILD_TOOLS=ON && cmake --build build -j
   --org-public-key <org_public_key_hex> \
   --module-id <module_id_hex> \
   --module-pk <module_pk_hex> \
-  --module-signature <module_sig_hex>
+  --module-merkle-root <merkle_root_hex> \
+  --module-signature <sig_hex>
 ```
 
 This outputs a hex string. POST it to sead-core:
@@ -144,7 +186,7 @@ curl -X POST http://localhost:8080/events \
   "not_before": <unix timestamp>,
   "not_after": <0 or timestamp>,
   "module_endorsements": [
-    [<module_id_hex>, <module_pk_hex>, <module_sig_hex>]
+    [<module_id_hex>, <module_pk_hex>, <merkle_root_hex>, <sig_hex>]
   ]
 }
 ```
@@ -155,12 +197,12 @@ curl -X POST http://localhost:8080/events \
 | `2` | `org_pk` | bytes | Organization's XMSS public key |
 | `3` | `not_before` | unsigned int | Validity start (UNIX epoch seconds) |
 | `4` | `not_after` | unsigned int | Validity end (`0` = no expiry) |
-| `5` | `module_endorsements` | array | Array of `[module_id, module_pk, signature]` |
+| `5` | `module_endorsements` | array | Array of `[module_id, module_pk, merkle_root, signature]` |
 
 The envelope is signed by the **org key** (the same keypair being
 registered). This bootstraps the org's identity in the DAG.
 
-### 3b — Authorize the edge (EdgeAuthorization)
+### 3c — Authorize the edge (EdgeAuthorization)
 
 ```bash
 ./build/tools/gen-bootstrap edge-authorization \
@@ -200,7 +242,7 @@ curl -X POST http://localhost:8080/events \
 | `5` | `not_after` | unsigned int | Authorization end (`0` = no expiry) |
 
 The envelope is signed by the **org key** (the same one registered in
-step 3a). This proves the org authorizes this edge.
+step 3b). This proves the org authorizes this edge.
 
 ### Envelope structure (both events)
 
