@@ -126,19 +126,12 @@ The module's XMSS private key lives inside the hardware — it cannot be
 exported. You must connect the module via UART and use
 `stardome-client endorse` to request the signature.
 
-#### Connect the module
 
-```bash
-# Connect to the module via USB-UART
-ls /dev/ttyUSB*
-# Typically /dev/ttyUSB0 or /dev/ttyUSB1
-```
 
 #### Generate the signature
 
 ```bash
-# Build stardome-client (from the stardome-client repo: https://github.com/Stardome-technology/stardome-client)
-make
+
 
 # Request the module to sign the org-endorsement payload.
 # The 4 values (org_id, org_pk, not_before, not_after) are placed as
