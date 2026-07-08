@@ -119,8 +119,6 @@ The module's XMSS private key lives inside the hardware — it cannot be
 exported. You must connect the module via UART and use
 `stardome-client endorse` to request the signature.
 
-
-
 #### Generate the signature
 
 ```bash
@@ -142,11 +140,26 @@ The output prints the `merkle_root` hex and `xmss_sig` hex. Use these
 with `gen-bootstrap` in the next step. The `endorse` command reuses the
 standard `FLAG_SIGN` wire path — no firmware changes needed.
 
-> **Note on timestamps:** `--not-before` defaults to current time,
-> `--not-after` defaults to `0` (no expiry). The org admin and module
-> operator must agree on the same timestamps — the values passed here
-> must exactly match the values passed to `gen-bootstrap` in the next
-> step, because the module's Merkle tree commits to them.
+> **Important — timestamps are UNIX epoch seconds.**
+> `not_before` and `not_after` are **UNIX epoch seconds** (UTC), e.g.
+> `1770336000` for 2026-03-01T00:00:00Z. The server compares them
+> numerically and rejects `not_before > not_after`. This is **not**
+> an opaque byte comparison — the values encode a real validity window.
+>
+> Get the current UNIX timestamp:
+> ```bash
+> date +%s
+> ```
+>
+> Convert a date to UNIX seconds:
+> ```bash
+> date -d "2026-03-01 00:00:00 UTC" +%s
+> ```
+>
+> `--not-before` defaults to `$(date +%s)` if omitted.
+> `--not-after` defaults to `0` (no expiry) if omitted.
+> The EXACT SAME integer values must be passed to `gen-bootstrap` in
+> step 3b — the Merkle tree leaf commits to those raw bytes.
 
 ### 3b — Register the organization (OrgGenesis)
 
