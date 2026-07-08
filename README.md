@@ -42,6 +42,12 @@ docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --help
 Each run prints `ID`, `SECRET_KEY`, and `PUBLIC_KEY` in hex. Save these
 values — you will need them for configuration and bootstrap.
 
+> **Note:** `--label` is just a printed annotation (e.g. `── Label: org ──`).
+> The actual `ID`, `SECRET_KEY`, and `PUBLIC_KEY` lines are always hex
+> strings regardless of the label you choose. `--label` does not affect
+> the key material. All tools (`gen-bootstrap`, `gen-token`, `endorse`)
+> expect these hex values, not the label text.
+
 ---
 
 ## Step 2 — Deploy the stack
