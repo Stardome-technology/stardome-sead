@@ -138,8 +138,8 @@ exported. You must connect the module via UART and use
   --org-pk <org_pk_hex> \
   --not-before <unix_epoch_sec> \
   --not-after <unix_epoch_sec> \
-  --out-tree module_tree.bin \
-  --out-attestation module_att.bin
+  --out-tree endorse_tree.bin \
+  --out-attestation endorse_att.bin
   --quiet
 ```
 
@@ -199,16 +199,24 @@ It is available as a Docker image — no source build needed:
 docker pull ghcr.io/stardome-technology/stardome-sead/gen-bootstrap:latest
 
 # Register the org — feed the attestation binary directly.
-# Mount the current directory so the tool can read the attestation file:
+# Mount the directory containing the attestation file and cd to the
+# same relative location so the container sees the correct path.
+# For example, if the attestation file is at ../signatures/endorse_att.bin:
+cd ../signatures
 docker run --rm -v "$(pwd):/data" \
   ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-genesis \
   --org-id <org_id_hex> \
   --org-signing-key <org_secret_key_hex> \
   --org-public-key <org_public_key_hex> \
-  --attestation-file /data/module_att.bin \
+  --attestation-file /data/endorse_att.bin \
   --not-before <unix_epoch_sec> \
   --not-after <unix_epoch_sec>
 ```
+
+> **Important:** Docker only sees files inside mounted volumes. The
+> `--attestation-file` path must be inside a directory you passed with
+> `-v`. If the file is elsewhere, mount that directory instead:
+> `docker run --rm -v /absolute/path/to/signatures:/data ...`
 
 The `--attestation-file` option extracts the module's public key, Merkle root,
 and XMSS signature from the attestation CBOR binary, and derives the
