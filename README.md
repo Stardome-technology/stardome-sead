@@ -396,20 +396,30 @@ docker pull ghcr.io/stardome-technology/stardome-sead/gen-token:latest
 # The tool computes SHAKE256(artifact_bytes) automatically and includes
 # it as payload_hash in the token. The IPFS node verifies the hash
 # matches the uploaded file.
+# Use --out-file to write the token to a file for later use:
 docker run --rm -v "$(pwd):/data" \
   ghcr.io/stardome-technology/stardome-sead/gen-token \
   --org-id <org_id_hex> \
   --org-signing-key <org_secret_key_hex> \
   --org-public-key <org_public_key_hex> \
-  --payload-file /data/endorse_att.bin
+  --payload-file /data/endorse_att.bin \
+  --out-file /data/token.b64
 
-# Output: a single line of base64url-encoded CBOR
-# Ready for: Authorization: Bearer <token>
+# The token file contains a single line of base64url-encoded CBOR.
+# Use it with any IPFS pinning client:
+curl -X POST https://ipfs.stardome.cloud/api/v0/add \
+  -H "Authorization: Bearer $(cat token.b64)" \
+  -F "file=@endorse_att.bin"
 ```
 
 To generate a token without binding to a specific artifact (less secure),
 omit `--payload-file`. The token will authorize any pinning request from
 your org.
+
+Tokens are valid for 5 minutes by default (configurable with `--ttl`).
+Since they are single-use in practice (bound to a `payload_hash`), you
+should generate a fresh token for each pinning operation. Store the token
+file securely — it grants write access to IPFS under your org identity.
 
 ### Token structure
 
