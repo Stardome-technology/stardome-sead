@@ -243,13 +243,28 @@ defaults to the current time (`not_before`) and `0` (`not_after`), which
 will cause a signature mismatch if the endorsement was generated with
 different values.
 
-This outputs a hex string. POST it to sead-core:
+This outputs a hex string. Use `--out-file` to write it to a file, then POST it:
 
 ```bash
+# Write the envelope to a file (avoids terminal copy-paste issues)
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-genesis \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --attestation-file /data/endorse_att.bin \
+  --not-before <unix_epoch_sec> \
+  --not-after <unix_epoch_sec> \
+  --out-file /data/envelope.hex
+
+# POST the file contents as the JSON value
 curl -X POST http://localhost:8080/events \
   -H "Content-Type: application/json" \
-  -d '{"envelope_hex": "<paste hex output here>"}'
+  -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
+
+> **Tip:** The envelope hex can be very large (XMSS signatures are ~18 KB).
+> Using `--out-file` avoids terminal scroll and copy-paste truncation.
 
 **What's inside the envelope** — the CBOR body is equivalent to this JSON:
 
@@ -279,14 +294,16 @@ registered). This bootstraps the org's identity in the DAG.
 ### 3c — Authorize the edge (EdgeAuthorization)
 
 ```bash
-docker run --rm ghcr.io/stardome-technology/stardome-sead/gen-bootstrap edge-authorization \
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap edge-authorization \
   --org-id <org_id_hex> \
   --org-signing-key <org_secret_key_hex> \
   --org-public-key <org_public_key_hex> \
   --edge-id <edge_id_hex> \
   --edge-pk <edge_pk_hex> \
   --not-before <unix_epoch_sec> \
-  --not-after <unix_epoch_sec>
+  --not-after <unix_epoch_sec> \
+  --out-file /data/envelope.hex
 ```
 
 The `--not-before` and `--not-after` default to `now` and `0` respectively
@@ -298,7 +315,7 @@ POST the output hex to sead-core:
 ```bash
 curl -X POST http://localhost:8080/events \
   -H "Content-Type: application/json" \
-  -d '{"envelope_hex": "<paste hex output here>"}'
+  -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
 
 **What's inside** — equivalent JSON:
@@ -365,22 +382,34 @@ The auth stack only verifies tokens — it never generates them. You produce
 tokens on the **same secure laptop** from Step 1, using the `gen-token`
 tool. The org signing key never leaves your machine.
 
+> **What is an artifact?** In this context, the "artifact" is the data you
+> want to pin to IPFS — typically the **module attestation binary**
+> (`endorse_att.bin` from step 3a). The token is bound to that specific
+> artifact via `payload_hash`. This proves the artifact was attested by
+> an authorized module at the time the token was generated.
+
 ```bash
 # Pull the gen-token image (public, no auth needed)
 docker pull ghcr.io/stardome-technology/stardome-sead/gen-token:latest
 
-# Generate a token bound to an artifact
-# Mount the directory containing the payload file:
+# Generate a token bound to an attestation artifact.
+# The tool computes SHAKE256(artifact_bytes) automatically and includes
+# it as payload_hash in the token. The IPFS node verifies the hash
+# matches the uploaded file.
 docker run --rm -v "$(pwd):/data" \
   ghcr.io/stardome-technology/stardome-sead/gen-token \
   --org-id <org_id_hex> \
   --org-signing-key <org_secret_key_hex> \
   --org-public-key <org_public_key_hex> \
-  --payload-file /data/artifact.cbor
+  --payload-file /data/endorse_att.bin
 
 # Output: a single line of base64url-encoded CBOR
 # Ready for: Authorization: Bearer <token>
 ```
+
+To generate a token without binding to a specific artifact (less secure),
+omit `--payload-file`. The token will authorize any pinning request from
+your org.
 
 ### Token structure
 
