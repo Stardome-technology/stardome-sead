@@ -138,12 +138,30 @@ exported. You must connect the module via UART and use
   --org-pk <org_pk_hex> \
   --not-before <unix_epoch_sec> \
   --not-after <unix_epoch_sec> \
-  --out-tree module_tree.bin \
-  --out-attestation module_att.bin
+  --out-tree endorse_tree.bin \
+  --out-attestation endorse_att.bin
+  --quiet
 ```
 
-The output prints the `merkle_root` hex and `xmss_sig` hex. Use these
-with `gen-bootstrap` in the next step. The `endorse` command reuses the
+The command prints the required hex values to stdout. You do **not** need
+to manually parse the binary files — the tool already shows:
+
+```
+Module XMSS public key:
+  <module_pk_hex>
+
+Merkle root (32 bytes):
+  <merkle_root_hex>
+
+XMSS signature (<N> bytes):
+  <sig_hex>
+
+Use with gen-bootstrap:
+  --module-merkle-root <merkle_root_hex>
+  --module-signature <sig_hex>
+```
+
+Copy these values for the next step. The `endorse` command reuses the
 standard `FLAG_SIGN` wire path — no firmware changes needed.
 
 > **Important — timestamps are UNIX epoch seconds.**
@@ -164,29 +182,89 @@ standard `FLAG_SIGN` wire path — no firmware changes needed.
 >
 > `--not-before` defaults to `$(date +%s)` if omitted.
 > `--not-after` defaults to `0` (no expiry) if omitted.
-> The EXACT SAME integer values must be passed to `gen-bootstrap` in
-> step 3b — the Merkle tree leaf commits to those raw bytes.
+>
+> **Critical:** The `org-genesis` command below **must** receive the
+> EXACT SAME `--not-before` and `--not-after` integer values, because the
+> Merkle tree leaf committed to those raw bytes. Passing no values uses
+> defaults that must match within the same second — **always pass them
+> explicitly to avoid clock-skew mismatch.**
 
 ### 3b — Register the organization (OrgGenesis)
 
+The `gen-bootstrap` tool can read the attestation file directly from step 3a.
+It is available as a Docker image — no source build needed:
+
 ```bash
-./build/tools/gen-bootstrap org-genesis \
+# Pull the gen-bootstrap image (public, no auth needed)
+docker pull ghcr.io/stardome-technology/stardome-sead/gen-bootstrap:latest
+
+# Register the org — feed the attestation binary directly.
+# Mount the directory containing the attestation file and cd to the
+# same relative location so the container sees the correct path.
+# For example, if the attestation file is at ../signatures/endorse_att.bin:
+cd ../signatures
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-genesis \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --attestation-file /data/endorse_att.bin \
+  --not-before <unix_epoch_sec> \
+  --not-after <unix_epoch_sec>
+```
+
+> **Important:** Docker only sees files inside mounted volumes. The
+> `--attestation-file` path must be inside a directory you passed with
+> `-v`. If the file is elsewhere, mount that directory instead:
+> `docker run --rm -v /absolute/path/to/signatures:/data ...`
+
+The `--attestation-file` option extracts the module's public key, Merkle root,
+and XMSS signature from the attestation CBOR binary, and derives the
+`module_id` as `SHAKE256(module_pk)` automatically.
+
+Alternatively, you can pass individual module arguments (legacy):
+
+```bash
+docker run --rm ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-genesis \
   --org-id <org_id_hex> \
   --org-signing-key <org_secret_key_hex> \
   --org-public-key <org_public_key_hex> \
   --module-id <module_id_hex> \
   --module-pk <module_pk_hex> \
   --module-merkle-root <merkle_root_hex> \
-  --module-signature <sig_hex>
+  --module-signature <sig_hex> \
+  --not-before <unix_epoch_sec> \
+  --not-after <unix_epoch_sec>
 ```
 
-This outputs a hex string. POST it to sead-core:
+The `--not-before` and `--not-after` values **must** match exactly what
+you passed to `stardome-client endorse` in step 3a. If omitted, the tool
+defaults to the current time (`not_before`) and `0` (`not_after`), which
+will cause a signature mismatch if the endorsement was generated with
+different values.
+
+This outputs a hex string. Use `--out-file` to write it to a file, then POST it:
 
 ```bash
+# Write the envelope to a file (avoids terminal copy-paste issues)
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-genesis \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --attestation-file /data/endorse_att.bin \
+  --not-before <unix_epoch_sec> \
+  --not-after <unix_epoch_sec> \
+  --out-file /data/envelope.hex
+
+# POST the file contents as the JSON value
 curl -X POST http://localhost:8080/events \
   -H "Content-Type: application/json" \
-  -d '{"envelope_hex": "<paste hex output here>"}'
+  -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
+
+> **Tip:** The envelope hex can be very large (XMSS signatures are ~18 KB).
+> Using `--out-file` avoids terminal scroll and copy-paste truncation.
 
 **What's inside the envelope** — the CBOR body is equivalent to this JSON:
 
@@ -216,20 +294,28 @@ registered). This bootstraps the org's identity in the DAG.
 ### 3c — Authorize the edge (EdgeAuthorization)
 
 ```bash
-./build/tools/gen-bootstrap edge-authorization \
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap edge-authorization \
   --org-id <org_id_hex> \
   --org-signing-key <org_secret_key_hex> \
   --org-public-key <org_public_key_hex> \
   --edge-id <edge_id_hex> \
-  --edge-pk <edge_pk_hex>
+  --edge-pk <edge_pk_hex> \
+  --not-before <unix_epoch_sec> \
+  --not-after <unix_epoch_sec> \
+  --out-file /data/envelope.hex
 ```
+
+The `--not-before` and `--not-after` default to `now` and `0` respectively
+if omitted. The `not_before`/`not_after` here are the edge's authorization
+window — independent of the org genesis values.
 
 POST the output hex to sead-core:
 
 ```bash
 curl -X POST http://localhost:8080/events \
   -H "Content-Type: application/json" \
-  -d '{"envelope_hex": "<paste hex output here>"}'
+  -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
 
 **What's inside** — equivalent JSON:
@@ -296,20 +382,44 @@ The auth stack only verifies tokens — it never generates them. You produce
 tokens on the **same secure laptop** from Step 1, using the `gen-token`
 tool. The org signing key never leaves your machine.
 
-```bash
-# Build the gen-token tool (from the sead-service repo)
-cmake -B build -DBUILD_TOOLS=ON && cmake --build build -j
+> **What is an artifact?** In this context, the "artifact" is the data you
+> want to pin to IPFS — typically the **module attestation binary**
+> (`endorse_att.bin` from step 3a). The token is bound to that specific
+> artifact via `payload_hash`. This proves the artifact was attested by
+> an authorized module at the time the token was generated.
 
-# Generate a token bound to an artifact
-./build/tools/gen-token \
+```bash
+# Pull the gen-token image (public, no auth needed)
+docker pull ghcr.io/stardome-technology/stardome-sead/gen-token:latest
+
+# Generate a token bound to an attestation artifact.
+# The tool computes SHAKE256(artifact_bytes) automatically and includes
+# it as payload_hash in the token. The IPFS node verifies the hash
+# matches the uploaded file.
+# Use --out-file to write the token to a file for later use:
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-token \
   --org-id <org_id_hex> \
   --org-signing-key <org_secret_key_hex> \
   --org-public-key <org_public_key_hex> \
-  --payload-file artifact.cbor
+  --payload-file /data/endorse_att.bin \
+  --out-file /data/token.b64
 
-# Output: a single line of base64url-encoded CBOR
-# Ready for: Authorization: Bearer <token>
+# The token file contains a single line of base64url-encoded CBOR.
+# Use it with any IPFS pinning client:
+curl -X POST https://ipfs.stardome.cloud/api/v0/add \
+  -H "Authorization: Bearer $(cat token.b64)" \
+  -F "file=@endorse_att.bin"
 ```
+
+To generate a token without binding to a specific artifact (less secure),
+omit `--payload-file`. The token will authorize any pinning request from
+your org.
+
+Tokens are valid for 5 minutes by default (configurable with `--ttl`).
+Since they are single-use in practice (bound to a `payload_hash`), you
+should generate a fresh token for each pinning operation. Store the token
+file securely — it grants write access to IPFS under your org identity.
 
 ### Token structure
 
