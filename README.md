@@ -412,14 +412,6 @@ curl -X POST https://ipfs.stardome.cloud/api/v0/add \
   -F "file=@endorse_att.bin"
 ```
 
-To generate a token without binding to a specific artifact (less secure),
-omit `--payload-file`. The token will authorize any pinning request from
-your org.
-
-Tokens are valid for 5 minutes by default (configurable with `--ttl`).
-Since they are single-use in practice (bound to a `payload_hash`), you
-should generate a fresh token for each pinning operation. Store the token
-file securely — it grants write access to IPFS under your org identity.
 
 ### Token structure
 
