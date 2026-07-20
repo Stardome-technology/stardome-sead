@@ -378,40 +378,79 @@ curl http://localhost:8080/edges/<org_id_hex>/<edge_id_hex>
 
 ## Step 4 — Generate auth tokens (IPFS pinning)
 
-The auth stack only verifies tokens — it never generates them. You produce
-tokens on the **same secure laptop** from Step 1, using the `gen-token`
-tool. The org signing key never leaves your machine.
+The auth stack only verifies tokens — it never generates them. The
+**edge-service** container holds the org signing key in memory (loaded
+from `EDGE_ORG_SIGNING_KEY` / `EDGE_ORG_SIGNING_KEY_FILE` at startup)
+and exposes a `POST /auth/token` API.
 
-> **What is an artifact?** In this context, the "artifact" is the data you
-> want to pin to IPFS — typically the **module attestation binary**
-> (`endorse_att.bin` from step 3a). The token is bound to that specific
-> artifact via `payload_hash`. This proves the artifact was attested by
-> an authorized module at the time the token was generated.
+> **✅  XMSS index persistence:** The edge-service now stores the org
+> signing key's current one-time index in a `key_index` SQLite table
+> alongside the receipt store (both in the `sead_data` volume). On any
+> container restart (crash, `docker compose restart`, or `down` + `up`),
+> the index is reloaded from the database, so token generation resumes
+> where it left off. The `sead_data` volume **must** persist across
+> restarts — this is the default for Docker volumes. Using
+> `docker compose down -v` destroys both the receipt store and the key
+> index; in that case, generate a fresh keypair.
+
+### Generate an org-wide token (no payload binding)
 
 ```bash
-# Pull the gen-token image (public, no auth needed)
-docker pull ghcr.io/stardome-technology/stardome-sead/gen-token:latest
+# The edge-service must be running. Generate a token with no expiry
+# and no payload_hash — reusable across all artifacts.
+curl -X POST http://localhost:8081/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"ttl": 0}'
 
-# Generate a token bound to an attestation artifact.
-# The tool computes SHAKE256(artifact_bytes) automatically and includes
-# it as payload_hash in the token. The IPFS node verifies the hash
-# matches the uploaded file.
-# Use --out-file to write the token to a file for later use:
-docker run --rm -v "$(pwd):/data" \
-  ghcr.io/stardome-technology/stardome-sead/gen-token \
-  --org-id <org_id_hex> \
-  --org-signing-key <org_secret_key_hex> \
-  --org-public-key <org_public_key_hex> \
-  --payload-file /data/endorse_att.bin \
-  --out-file /data/token.b64
-
-# The token file contains a single line of base64url-encoded CBOR.
-# Use it with any IPFS pinning client:
-curl -X POST https://ipfs.stardome.cloud/api/v0/add \
-  -H "Authorization: Bearer $(cat token.b64)" \
-  -F "file=@endorse_att.bin"
+# Response:
+# {
+#   "token": "<base64url-encoded CBOR>",
+#   "expiry": 0,
+#   "note": "org-wide token — no expiry, no payload binding. Use with caution."
+# }
 ```
 
+The `ttl` field is optional (default `0` = no expiry). Set a positive
+value in seconds for a time-limited token:
+
+```bash
+curl -X POST http://localhost:8081/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"ttl": 3600}'
+
+# Response includes the current index:
+# {
+#   "token": "...",
+#   "expiry": 3600,
+#   "current_index": 1
+# }
+```
+
+### Inspect and manage the key index
+
+The edge-service provides two admin endpoints for the key index:
+
+```bash
+# Query current index state
+curl http://localhost:8081/auth/key-index
+# Response: {"key_id": "<hex>", "current_index": <uint>, "persisted": true}
+
+# Reset index to 0 (⚠️  use with caution — only if you are sure)
+curl -X POST http://localhost:8081/auth/key-index/reset
+# Response: {"key_id": "<hex>", "current_index": 0, "status": "reset"}
+```
+
+### Use the token
+
+```bash
+TOKEN=$(curl -s http://localhost:8081/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"ttl": 3600}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
+curl -X POST https://ipfs.stardome.cloud/api/v0/add \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@endorse_att.bin"
+```
 
 ### Token structure
 
@@ -421,12 +460,18 @@ See [sead_auth_token_v1.0.0.cddl](https://github.com/Stardome-technology/stardom
 |----------|-------|------|-------------|
 | `1` | `org_id` | bytes | Organization identifier |
 | `2` | `scope` | text string | `"ipfs_pin"` |
-| `3` | `expiry` | unsigned int | UNIX timestamp |
+| `3` | `expiry` | unsigned int | UNIX timestamp (`0` = no expiry) |
 | `4` | `nonce` | bytes (16) | Random challenge |
 | `5` | `signature` | bytes | XMSS signature over fields 1-4 |
 | `8` | `payload_hash` | bytes (32) | (optional) Binds token to a specific artifact |
 
 Token is **base64url-encoded** CBOR (`RFC 4648 §5`, no padding).
+
+> **Note:** The standalone `gen-token` CLI tool exists for build-time
+> testing but is **not recommended** for production use, because each
+> invocation loads the key from hex and always starts at index 0.
+> Always prefer the `POST /auth/token` API on a running edge-service
+> to ensure the XMSS one-time index advances correctly.
 
 ---
 
