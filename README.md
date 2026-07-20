@@ -383,17 +383,15 @@ The auth stack only verifies tokens — it never generates them. The
 from `EDGE_ORG_SIGNING_KEY` / `EDGE_ORG_SIGNING_KEY_FILE` at startup)
 and exposes a `POST /auth/token` API.
 
-> **⚠️  XMSS index advancement:** The edge-service loads the org signing
-> key from the `EDGE_ORG_SIGNING_KEY` environment variable at startup.
-> Each `POST /auth/token` call advances the one-time index in-RAM, but
-> the updated key is never written back to disk. On **any** container
-> restart (crash, `docker compose restart`, or `down` + `up`), the key
-> is reloaded from the env var and the index resets to 0. The
-> `sead_data` volume (see `docker-compose.remote.yml`) stores the
-> SQLite database only — it does **not** persist signing key state.
-> For production, generate a fresh key per deployment so the reset is
-> harmless, or design a key-management sidecar that periodically
-> writes the consumed SK back to a mounted host path.
+> **✅  XMSS index persistence:** The edge-service now stores the org
+> signing key's current one-time index in a `key_index` SQLite table
+> alongside the receipt store (both in the `sead_data` volume). On any
+> container restart (crash, `docker compose restart`, or `down` + `up`),
+> the index is reloaded from the database, so token generation resumes
+> where it left off. The `sead_data` volume **must** persist across
+> restarts — this is the default for Docker volumes. Using
+> `docker compose down -v` destroys both the receipt store and the key
+> index; in that case, generate a fresh keypair.
 
 ### Generate an org-wide token (no payload binding)
 
@@ -419,6 +417,27 @@ value in seconds for a time-limited token:
 curl -X POST http://localhost:8081/auth/token \
   -H "Content-Type: application/json" \
   -d '{"ttl": 3600}'
+
+# Response includes the current index:
+# {
+#   "token": "...",
+#   "expiry": 3600,
+#   "current_index": 1
+# }
+```
+
+### Inspect and manage the key index
+
+The edge-service provides two admin endpoints for the key index:
+
+```bash
+# Query current index state
+curl http://localhost:8081/auth/key-index
+# Response: {"key_id": "<hex>", "current_index": <uint>, "persisted": true}
+
+# Reset index to 0 (⚠️  use with caution — only if you are sure)
+curl -X POST http://localhost:8081/auth/key-index/reset
+# Response: {"key_id": "<hex>", "current_index": 0, "status": "reset"}
 ```
 
 ### Use the token
