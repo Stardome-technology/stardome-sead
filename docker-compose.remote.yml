@@ -47,6 +47,7 @@ services:
               "--org-public-key", "${EDGE_ORG_PUBLIC_KEY}",
               "--token-ttl", "${EDGE_TOKEN_TTL:-300}",
               "--storage-gateway-url", "${EDGE_STORAGE_GATEWAY_URL:-http://storage-gateway:8082}",
+              "--sead-core-url", "http://sead-core:8080",
               "--watchdog-interval", "${EDGE_WATCHDOG_INTERVAL_SEC:-30}",
               "--commit-strategy", "${EDGE_COMMIT_STRATEGY:-single}",
               "--batch-flush-interval", "${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}"]
