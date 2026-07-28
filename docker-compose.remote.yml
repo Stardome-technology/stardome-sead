@@ -157,6 +157,28 @@ services:
     networks:
       - sead-network
 
+  p2p-bridge:
+    image: ghcr.io/stardome-technology/stardome-sead/p2p-bridge:latest
+    network_mode: host
+    environment:
+      - BRIDGE_SEAD_CORE_URL=http://localhost:8080
+      - BRIDGE_P2P_URL=http://localhost:8089
+      - BRIDGE_TOPIC=sead-events
+    command: ["p2p-bridge",
+              "--sead-core-url", "http://localhost:8080",
+              "--p2p-url", "http://localhost:8089",
+              "--topic", "sead-events",
+              "--port", "8091"]
+    depends_on:
+      sead-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
 volumes:
   sead_data:
 
