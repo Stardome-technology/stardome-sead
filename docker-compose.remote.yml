@@ -164,8 +164,7 @@ services:
       - BRIDGE_SEAD_CORE_URL=http://localhost:8080
       - BRIDGE_P2P_URL=http://localhost:8089
       - BRIDGE_TOPIC=sead-events
-    command: ["p2p-bridge",
-              "--sead-core-url", "http://localhost:8080",
+    command: ["--sead-core-url", "http://localhost:8080",
               "--p2p-url", "http://localhost:8089",
               "--topic", "sead-events",
               "--port", "8091"]
