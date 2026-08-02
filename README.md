@@ -17,6 +17,13 @@ produce tokens for IPFS pinning.
 - **source-data-service** — controlled disclosure of source data
 - **sead-sync** — event synchronization across nodes via p2p pubsub
 
+> **⚠️ Public port convention:** The published host ports `30080` (sead-core)
+> and `30090` (sead-sync) are **standardized across all public deployments**
+> and must not be changed in this compose file. If you need different ports,
+> override them via environment variables or maintain your own copy of the
+> compose file. The internal container ports (`8080`, `8081`–`8085`, `8090`)
+> are private to the stack and can be freely customized.
+
 ---
 
 ## Step 1 — Generate keys
@@ -89,7 +96,7 @@ curl http://localhost:8080/health
 | Variable | Service | Required | Default | Description |
 |----------|---------|----------|---------|-------------|
 | `LOG_LEVEL` | all | No | `info` | Logging verbosity |
-| `SEAD_CORE_PORT` | sead-core | No | `8080` | HTTP port |
+| `SEAD_CORE_PORT` | sead-core | No | `8080` | Internal container port (private) |
 | `EDGE_ORG_ID` | edge-service | **†** | — | Organization ID (hex) |
 | `EDGE_ID` | edge-service | **†** | — | Edge device ID (hex) |
 | `EDGE_SIGNING_KEY` | edge-service | **†** | — | Edge XMSS private key (hex) |
@@ -100,13 +107,13 @@ curl http://localhost:8080/health
 | `EDGE_WATCHDOG_INTERVAL_SEC` | edge-service | No | `30` | Watchdog interval |
 | `EDGE_COMMIT_STRATEGY` | edge-service | No | `single` | `single` or `batch` |
 | `EDGE_BATCH_FLUSH_INTERVAL_SEC` | edge-service | No | `300` | Batch flush interval |
-| `STORAGE_GATEWAY_PORT` | storage-gateway | No | `8082` | HTTP port |
+| `STORAGE_GATEWAY_PORT` | storage-gateway | No | `8082` | Internal container port (private) |
 | `IPFS_API_BASE_URL` | storage-gateway | No | `https://ipfs.stardome.cloud` | IPFS API endpoint |
 | `AUTH_SKEW_TOLERANCE_SEC` | auth-service | No | `30` | Token expiry skew tolerance |
 | `AUTH_KEY_CACHE_TTL_SEC` | auth-service | No | `60` | Org key cache TTL |
 | `VERIFIER_SOURCE_DATA_BASE_URL` | verifier-service | No | `http://source-data-service:8085` | Source-data URL |
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
-| `SEAD_CORE_PUBLIC_PORT` | all | No | `30080` | Published host port for cross-org event fetch |
+| `SEAD_CORE_PUBLIC_PORT` | all | No | `30080` | **Public** — published host port for cross-org event fetch |
 
 ---
 
