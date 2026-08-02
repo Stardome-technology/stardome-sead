@@ -88,7 +88,7 @@ docker compose -f docker-compose.remote.yml pull
 docker compose -f docker-compose.remote.yml up -d
 
 # Verify all services are healthy
-curl http://localhost:8080/health
+curl http://localhost:30080/health
 ```
 
 ### Configuration reference
@@ -267,7 +267,7 @@ docker run --rm -v "$(pwd):/data" \
   --out-file /data/envelope.hex
 
 # POST the file contents as the JSON value
-curl -X POST http://localhost:8080/events \
+curl -X POST http://localhost:30080/events \
   -H "Content-Type: application/json" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
@@ -322,7 +322,7 @@ window — independent of the org genesis values.
 POST the output hex to sead-core:
 
 ```bash
-curl -X POST http://localhost:8080/events \
+curl -X POST http://localhost:30080/events \
   -H "Content-Type: application/json" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
@@ -376,10 +376,10 @@ builds this for you, but here is what it contains:
 ### Verify
 
 ```bash
-curl http://localhost:8080/orgs/<org_id_hex>
+curl http://localhost:30080/orgs/<org_id_hex>
 # Expected: {"status":"active","org_pk_hex":"<pk>"}
 
-curl http://localhost:8080/edges/<org_id_hex>/<edge_id_hex>
+curl http://localhost:30080/edges/<org_id_hex>/<edge_id_hex>
 # Expected: {"status":"authorized","edge_pk_hex":"<pk>"}
 ```
 
