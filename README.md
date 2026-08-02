@@ -15,6 +15,7 @@ produce tokens for IPFS pinning.
 - **auth-service** — token verification for external services
 - **verifier-service** — independent verification of event chains
 - **source-data-service** — controlled disclosure of source data
+- **sead-sync** — event synchronization across nodes via p2p pubsub
 
 ---
 
@@ -105,6 +106,7 @@ curl http://localhost:8080/health
 | `AUTH_KEY_CACHE_TTL_SEC` | auth-service | No | `60` | Org key cache TTL |
 | `VERIFIER_SOURCE_DATA_BASE_URL` | verifier-service | No | `http://source-data-service:8085` | Source-data URL |
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
+| `SEAD_CORE_PUBLIC_PORT` | all | No | `30080` | Published host port for cross-org event fetch |
 
 ---
 
