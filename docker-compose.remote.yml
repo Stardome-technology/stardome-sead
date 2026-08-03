@@ -164,7 +164,11 @@ services:
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=sead-sync
-    command: ["sead-sync", "--port", "8090", "--sead-core-url", "http://sead-core:8080"]
+      - SYNC_ORG_ID=${SYNC_ORG_ID:?error}
+      - SYNC_P2P_URL=${SYNC_P2P_URL:-http://p2p:30089}
+    command: ["sead-sync", "--port", "8090", "--sead-core-url", "http://sead-core:8080",
+              "--p2p-url", "${SYNC_P2P_URL:-http://p2p:30089}",
+              "--org-id", "${SYNC_ORG_ID:?error}"]
     depends_on:
       sead-core:
         condition: service_healthy
