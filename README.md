@@ -76,8 +76,17 @@ EDGE_ID=<edge_id_hex>
 EDGE_SIGNING_KEY=<edge_secret_key_hex>
 EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
+SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
+SYNC_P2P_URL=http://<this-node-lan-ip>:30089
 EOF
 ```
+
+> **Key env for the p2p sync** — `SYNC_ORG_ID` and `SYNC_P2P_URL` configure
+> the `sead-sync` service (real p2p sync, replaces the removed p2p-bridge).
+> `SYNC_ORG_ID` is **required** (service exits without it) and must match
+> `EDGE_ORG_ID`. `SYNC_P2P_URL` must use this node's **LAN/mesh IP**, not
+> `http://p2p:30089` — p2pd runs with `network_mode: host` and is not
+> reachable at the `p2p` hostname from the bridge network.
 
 ### Start
 
@@ -113,6 +122,8 @@ curl http://localhost:30080/health
 | `AUTH_KEY_CACHE_TTL_SEC` | auth-service | No | `60` | Org key cache TTL |
 | `VERIFIER_SOURCE_DATA_BASE_URL` | verifier-service | No | `http://source-data-service:8085` | Source-data URL |
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
+| `SYNC_ORG_ID` | sead-sync | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; p2p sync identity |
+| `SYNC_P2P_URL` | sead-sync | **†** | — | p2p URL at the **node's LAN/mesh IP** (e.g. `http://192.168.60.1:30089`); required for inter-node sync |
 | `SEAD_CORE_PUBLIC_PORT` | all | No | `30080` | **Public** — published host port for cross-org event fetch |
 
 ---
