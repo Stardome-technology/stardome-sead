@@ -254,8 +254,9 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # ── Edge-service (remote brokers) ──────────────────────────────────
-    # The broker calls POST /ingest and POST /auth/token on this base URL.
+    # ── Edge-service: ingest (remote brokers) ──────────────────────────
+    # Requires a valid org auth token (Bearer header) — verified by the
+    # edge-service itself against sead-core.
     location /ingest {
         proxy_pass http://127.0.0.1:8081;
         proxy_http_version 1.1;
@@ -266,7 +267,10 @@ server {
         proxy_read_timeout 600s;
     }
 
-    location /auth/ {
+    # ── Edge-service: token minting (remote brokers) ───────────────────
+    # Only POST /auth/token is exposed — the key-index admin endpoints stay
+    # internal (reachable via localhost:8081 only).
+    location = /auth/token {
         proxy_pass http://127.0.0.1:8081;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -308,28 +312,49 @@ SEAD_EDGE_URL=https://edge.example.com
 > The `extra_hosts: host.docker.internal` entry in the broker compose is
 > harmless but **no longer needed** in remote mode — remove it if you prefer.
 
-### 7.1 Security note — `/ingest` has no built-in auth
+### 7.1 How `/ingest` is authenticated
 
-The edge-service `/ingest` handler currently **trusts the caller** — it does
-not validate an auth token on the request (see the code comment in
-`edge-service/main.cpp`: *"the edge-service trusts that the caller has
-authenticated the edge identity. In production, this would be validated against
-the edge's auth token"*).
+The edge-service `/ingest` handler now **requires a valid org auth token** on
+every request. The caller sends the token as a `Bearer` header:
 
-For a production VPS you should **not** expose `/ingest` to the open internet
-as-is. Options, in order of preference:
+```
+Authorization: Bearer <base64url-encoded CBOR auth token>
+```
 
-1. **Restrict by IP** — allow `/ingest` only from known broker/integrator IPs
-   (nginx `allow`/`deny`, or firewall).
-2. **Add an auth gate** — front `/ingest` with an `auth_request` subrequest to
-   the auth-service (port `9000`), mirroring the IPFS auth pattern in
-   `setup.md`. This requires the broker to send a verifiable token.
-3. **VPN / tunnel** — keep edge-service private and reach it over WireGuard/Tailscale.
+The edge-service:
+1. Decodes and parses the token (CBOR).
+2. Resolves the org's public key from sead-core and verifies the XMSS signature.
+3. Checks expiry, scope (`ipfs_pin`), and (if present) `payload_hash` binding.
+4. Enforces the **org boundary** — the token's `org_id` must match the
+   `org_id` in the request body.
 
-The broker is an **example** of how integrators implement their firmware. It is
-the integrator's responsibility to implement a secure, well-designed
-path/token to reach the edge services. The nginx config above is the minimal
-working baseline; harden it per your threat model.
+This means `/ingest` is no longer open to anonymous callers: only a caller
+holding a valid token for the target org can submit artifacts. The broker sends
+this token automatically (see below).
+
+> **Still recommended:** even with token auth, consider restricting `/ingest`
+> by IP (nginx `allow`/`deny` or firewall) to known broker/integrator networks
+> as defense-in-depth. The broker is an **example** of how integrators
+> implement their firmware; it is the integrator's responsibility to implement
+> a secure, well-designed path/token to reach the edge services.
+
+### 7.2 Broker token flow
+
+The broker resolves the token (per-request `auth_token` → `SEAD_AUTH_TOKEN`
+env var) **before** calling `/ingest`, and sends it as a `Bearer` header. No
+code change is needed in the broker `.env` beyond setting `SEAD_AUTH_TOKEN`:
+
+```bash
+# stardome-sead-broker .env
+SEAD_EDGE_URL=https://edge.example.com
+SEAD_AUTH_TOKEN=<base64url-encoded CBOR auth token>   # from POST /auth/token
+```
+
+> **Note on auto-generation:** because the edge now requires the token *on*
+> ingest, the broker's auto-generation fallback (which needs the `payload_hash`
+> known only *after* ingest) is no longer compatible with an auth-requiring
+> edge. Use a pre-generated token (`SEAD_AUTH_TOKEN` or per-request
+> `auth_token`) — the recommended production flow.
 
 ---
 
@@ -344,9 +369,14 @@ curl http://localhost:30089/health
 curl -k https://edge.example.com/health
 curl -k https://edge.example.com/api/v1/frontier
 
-# Edge proxy (from a remote broker host)
+# Edge proxy (from a remote broker host) — requires a valid auth token
+TOKEN=$(curl -s -X POST https://edge.example.com/auth/token \
+  -H "Content-Type: application/json" -d '{"ttl": 3600}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
 curl -X POST https://edge.example.com/ingest \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"module_id":"<hex>","org_id":"<hex>","edge_id":"<hex>","artifact":"<hex>"}'
 
 # P2P swarm listening
