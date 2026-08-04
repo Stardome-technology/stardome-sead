@@ -24,6 +24,19 @@ produce tokens for IPFS pinning.
 > compose file. The internal container ports (`8080`, `8081`–`8085`, `8090`)
 > are private to the stack and can be freely customized.
 
+## Public ports to open
+
+For an integrator deploying this stack, these are the **public** host ports that
+must be reachable from outside (open in the firewall / cloud security group):
+
+- **`30080/tcp`** — sead-core HTTP API (event store, org/edge key resolution, cross-org event fetch)
+- **`30090/tcp`** — sead-sync (p2p event synchronization)
+
+All other service ports (`8080`, `8081`–`8085`, `8090`) are **private** to the
+Docker network and should **not** be exposed publicly. If you only need local
+access, you can leave `30080`/`30090` closed to the internet and reach them via
+`localhost`.
+
 ---
 
 ## Step 1 — Generate keys
