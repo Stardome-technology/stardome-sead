@@ -1,0 +1,354 @@
+# Remote VPS Deployment — SEAD Stack + Explorer + P2P
+
+This guide covers the **remote VPS** deployment topology, where the full SEAD
+stack (edge-service, storage-gateway, auth-service, verifier-service,
+source-data-service, sead-core, sead-sync), the **Explorer** (UI + API), and
+the **P2P** sidecar all run on a single remote VPS.
+
+This differs from the a single-host demonstration setup which assumes
+the **broker running on the same device** as the edge-service and talking to it over
+the Docker network (`http://host.docker.internal:8081`). Here the broker still mimics the integrator firmware
+and reaches the VPS edge-service over the network as in real world deployments.
+
+```mermaid
+graph TB
+    subgraph "Remote VPS"
+        subgraph "SEAD stack (sead-network)"
+            SC[sead-core :8080]
+            ES[edge-service :8081]
+            SG[storage-gateway :8082]
+            AU[auth-service :8083]
+            VR[verifier-service :8084]
+            SD[source-data-service :8085]
+            SY[sead-sync :8090]
+        end
+        subgraph "Explorer"
+            UI[Explorer UI nginx :80]
+            API[Explorer API :8086]
+            DB[(PostgreSQL)]
+        end
+        P2P[p2pd :30089 / swarm 31001]
+        NGINX[nginx :443]
+    end
+
+    subgraph "Remote clients"
+        BR[Local broker / integrator firmware]
+        OTH[Other SEAD edge nodes]
+        BROWSER[Browser]
+    end
+
+    BR -->|"POST /ingest, /auth/token"| NGINX
+    NGINX -->|proxy| ES
+    BROWSER -->|"https://edge.example.com/"| NGINX
+    NGINX -->|proxy /api| API
+    API -->|internal| SC
+    API -->|internal| ES
+    API -->|internal| SG
+    API -->|internal| VR
+    OTH -->|"31001 tcp/udp + 30089"| P2P
+    P2P -->|"POST /events/{topic}"| SC
+    SY -->|"SYNC_P2P_URL"| P2P
+```
+
+---
+
+## 1. Single-host demo setup vs real deployment
+
+| Concern | Single-host (demo) | Remote VPS (this guide) |
+|---|---|---|
+| Broker → edge | `http://host.docker.internal:8081` (same host) | `https://edge.example.com` (via nginx) |
+| Edge-service exposure | Private Docker network only | Public via nginx (TLS) |
+| Explorer UI | `http://localhost:3000` | `https://edge.example.com/` |
+| Explorer API | `http://localhost:8086` | `https://edge.example.com/api` (optional) |
+| P2P swarm | LAN/mesh IP | VPS public IP |
+| sead-sync → p2p | `http://<lan-ip>:30089` | `http://<vps-ip>:30089` |
+
+---
+
+## 2. Ports to open on the VPS firewall
+
+> These are the **host** ports that must be reachable from outside. The
+> internal container ports (`8080`, `8081`–`8085`, `8090`) stay private to the
+> Docker network and are **not** exposed directly.
+
+| Port | Transport | Service | Who needs it |
+|---|---|---|---|
+| **80** | TCP | nginx (HTTP → HTTPS redirect) | everyone |
+| **443** | TCP | nginx (TLS: Explorer UI + API + edge proxy) | everyone |
+| **30080** | TCP | sead-core HTTP API (cross-org event fetch) | other SEAD nodes |
+| **30089** | TCP | p2p HTTP API (`/health`, `/peers`, `/events/{topic}`) | sead-sync, other nodes |
+| **31001** | TCP | libp2p swarm (TCP) | other SEAD nodes |
+| **31001** | UDP | libp2p swarm (QUIC) | other SEAD nodes |
+| **30090** | TCP | sead-sync (p2p event sync) | other SEAD nodes |
+
+**Not exposed** (private to the Docker network): `8081` (edge-service),
+`8082` (storage-gateway), `8083` (auth-service), `8084` (verifier-service),
+`8085` (source-data-service), `8086` (Explorer API — reachable only via nginx
+`/api`), `3000` (Explorer UI — reachable only via nginx `/`).
+
+### Firewall example (UFW)
+
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 30080/tcp
+sudo ufw allow 30089/tcp
+sudo ufw allow 31001/tcp
+sudo ufw allow 31001/udp
+sudo ufw allow 30090/tcp
+sudo ufw enable
+```
+
+> **Hardening (recommended):** `31001` (swarm) and `30089` (p2p API) only need
+> to be reachable by *other SEAD nodes*. If you know their IPs, restrict these
+> to those peers instead of opening them to the whole internet:
+> `sudo ufw allow from <peer-ip> to any port 31001 proto tcp`, etc.
+
+---
+
+## 3. Deploy the SEAD stack
+
+Follow the standard deployment in the main [`README.md`](../README.md)
+(keys, bootstrap genesis, edge authorization). The only differences for a VPS:
+
+### 3.1 `.env` for the stack
+
+```bash
+EDGE_ORG_ID=<org_id_hex>
+EDGE_ID=<edge_id_hex>
+EDGE_SIGNING_KEY=<edge_secret_key_hex>
+EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
+EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
+SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
+SYNC_P2P_URL=http://<VPS-PUBLIC-IP>:30089   # VPS public IP, NOT http://p2p:30089
+```
+
+> **`SYNC_P2P_URL`** must use the VPS's **public IP** (or a private IP reachable
+> from the sync container). The p2p sidecar runs with `network_mode: host`, so
+> it is **not** reachable at the `p2p` hostname from the bridge network.
+
+### 3.2 Start
+
+```bash
+docker compose -f docker-compose.remote.yml pull
+docker compose -f docker-compose.remote.yml up -d
+
+# Verify
+curl http://localhost:30080/health
+curl http://localhost:30089/health
+```
+
+---
+
+## 4. Deploy the Explorer
+
+Deploy the Explorer on the same VPS (see
+[stardome-sead-explorer](https://github.com/Stardome-technology/stardome-sead-explorer)).
+
+```bash
+docker network create sead-network 2>/dev/null || true
+docker compose -f docker-compose.remote.yml pull
+docker compose -f docker-compose.remote.yml up -d
+
+curl http://127.0.0.1:8086/health
+curl http://127.0.0.1:3000/
+```
+
+Because the Explorer runs on the **same VPS** as the stack, its `.env` uses the
+internal Docker-network URLs:
+
+```bash
+SEAD_CORE_URL=http://sead-core:8080
+EDGE_SERVICE_URL=http://edge-service:8081
+STORAGE_GATEWAY_URL=http://storage-gateway:8082
+VERIFIER_URL=http://verifier:8084
+DATABASE_URL=postgresql://explorer:explorer@sead-explorer-db:5432/sead_explorer
+OBSERVER_ORG_ID=<observer_org_id_hex>
+OBSERVER_NODE_ID=<observer_node_id_hex>
+```
+
+> The Explorer API (`8086`) and UI (`3000`) are **not** exposed directly. They
+> are reached through nginx on `443` (see below). If you want integrators to
+> consume the Explorer API, expose it via nginx `/api`; otherwise keep it
+> internal.
+
+---
+
+## 5. Deploy the P2P sidecar
+
+Deploy the p2p sidecar on the same VPS (see
+[stardome-sead-p2p](https://github.com/Stardome-technology/stardome-sead-p2p)).
+
+```bash
+docker compose -f docker-compose.remote.yml pull
+docker compose -f docker-compose.remote.yml up -d
+
+curl http://localhost:30089/health
+```
+
+For other SEAD nodes to reach this VPS node across subnets, configure them with
+this VPS as a DHT bootstrap peer:
+
+```bash
+# On the OTHER nodes' .env — replace <VPS-IP> and <PEER_ID> with real values
+P2P_BOOTSTRAP_PEERS=/ip4/<VPS-IP>/tcp/31001/p2p/<PEER_ID>
+```
+
+Get `<PEER_ID>` from this VPS node's `/health` endpoint.
+
+---
+
+## 6. Nginx reverse proxy
+
+Nginx terminates TLS on `443` and routes:
+
+- `/` → Explorer UI (nginx container on `3000`)
+- `/api` → Explorer API (FastAPI on `8086`)
+- `/ingest`, `/auth/token` → edge-service (`8081`) — **for remote brokers**
+- `/health` → edge-service health (optional)
+
+### 6.1 Install + TLS
+
+```bash
+sudo apt update
+sudo apt install nginx certbot python3-certbot-nginx
+sudo certbot --nginx -d edge.example.com
+```
+
+### 6.2 Site config
+
+Create `/etc/nginx/sites-available/edge.example.com`:
+
+```nginx
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name edge.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/edge.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/edge.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    # Large artifacts (XMSS signatures are ~18 KB; allow headroom)
+    client_max_body_size 10M;
+
+    # ── Explorer UI ────────────────────────────────────────────────────
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ── Explorer API ───────────────────────────────────────────────────
+    # Expose the API to integrators. Remove this block to keep it internal.
+    location /api/ {
+        proxy_pass http://127.0.0.1:8086;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ── Edge-service (remote brokers) ──────────────────────────────────
+    # The broker calls POST /ingest and POST /auth/token on this base URL.
+    location /ingest {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 600s;
+    }
+
+    location /auth/ {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ── Edge-service health (optional, unauthenticated) ────────────────
+    location = /health {
+        proxy_pass http://127.0.0.1:8081/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+Enable and reload:
+
+```bash
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -s /etc/nginx/sites-available/edge.example.com /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+---
+
+## 7. Point remote brokers at the VPS
+
+The broker reaches the edge-service via `SEAD_EDGE_URL`, which is used as a
+**base URL** — the broker appends `/ingest` and `/auth/token` itself.
+
+```bash
+# stardome-sead-broker .env
+SEAD_EDGE_URL=https://edge.example.com
+```
+
+> The `extra_hosts: host.docker.internal` entry in the broker compose is
+> harmless but **no longer needed** in remote mode — remove it if you prefer.
+
+### 7.1 Security note — `/ingest` has no built-in auth
+
+The edge-service `/ingest` handler currently **trusts the caller** — it does
+not validate an auth token on the request (see the code comment in
+`edge-service/main.cpp`: *"the edge-service trusts that the caller has
+authenticated the edge identity. In production, this would be validated against
+the edge's auth token"*).
+
+For a production VPS you should **not** expose `/ingest` to the open internet
+as-is. Options, in order of preference:
+
+1. **Restrict by IP** — allow `/ingest` only from known broker/integrator IPs
+   (nginx `allow`/`deny`, or firewall).
+2. **Add an auth gate** — front `/ingest` with an `auth_request` subrequest to
+   the auth-service (port `9000`), mirroring the IPFS auth pattern in
+   `setup.md`. This requires the broker to send a verifiable token.
+3. **VPN / tunnel** — keep edge-service private and reach it over WireGuard/Tailscale.
+
+The broker is an **example** of how integrators implement their firmware. It is
+the integrator's responsibility to implement a secure, well-designed
+path/token to reach the edge services. The nginx config above is the minimal
+working baseline; harden it per your threat model.
+
+---
+
+## 8. Verification checklist
+
+```bash
+# Stack
+curl http://localhost:30080/health
+curl http://localhost:30089/health
+
+# Explorer (via nginx)
+curl -k https://edge.example.com/health
+curl -k https://edge.example.com/api/v1/frontier
+
+# Edge proxy (from a remote broker host)
+curl -X POST https://edge.example.com/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"module_id":"<hex>","org_id":"<hex>","edge_id":"<hex>","artifact":"<hex>"}'
+
+# P2P swarm listening
+ss -tulpn | grep 31001
+```
