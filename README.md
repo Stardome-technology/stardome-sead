@@ -91,6 +91,9 @@ EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
 SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
 SYNC_P2P_URL=http://<this-node-lan-ip>:30089
+# Optional: orgs this node observes for cross-node sync (comma-separated
+# 64-hex org_ids; the node's own org is always observed).
+# SYNC_OBSERVE_ORGS=<other_org_id_hex>,<another_org_id_hex>
 EOF
 ```
 
@@ -100,6 +103,10 @@ EOF
 > `EDGE_ORG_ID`. `SYNC_P2P_URL` must use this node's **LAN/mesh IP**, not
 > `http://p2p:30089` — p2pd runs with `network_mode: host` and is not
 > reachable at the `p2p` hostname from the bridge network.
+> `SYNC_OBSERVE_ORGS` (optional) enables cross-node sync: the node
+> subscribes to each listed org's `sead-sync/{org}` topic and publishes
+> frontiers for it. Observation is **unilateral** — no publisher consent
+> needed, so each node simply lists the orgs it wants to verify for.
 
 ### Start
 
@@ -137,6 +144,7 @@ curl http://localhost:30080/health
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
 | `SYNC_ORG_ID` | sead-sync | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; p2p sync identity |
 | `SYNC_P2P_URL` | sead-sync | **†** | — | p2p URL at the **node's LAN/mesh IP** (e.g. `http://192.168.60.1:30089`); required for inter-node sync |
+| `SYNC_OBSERVE_ORGS` | sead-sync | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
 | `SEAD_CORE_PUBLIC_PORT` | all | No | `30080` | **Public** — published host port for cross-org event fetch |
 
 ---
