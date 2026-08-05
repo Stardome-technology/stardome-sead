@@ -108,6 +108,16 @@ EOF
 > frontiers for it. Observation is **unilateral** — no publisher consent
 > needed, so each node simply lists the orgs it wants to verify for.
 
+> **Cross-node sync (DAG-native auth replication)** — when a node observes
+> another org, foreign `edge_commit` events are validated only **after** their
+> authorization graph (`edge_authorization` → `org_genesis`) is replicated to
+> the local `sead-core`. `sead-sync` recursively fetches these dependencies
+> (via the events' `dependency_refs` field, with indexed fallback for legacy
+> events), submits them in topological order, and holds events that await
+> dependencies until they resolve. There is **no trusted-sync bypass**: every
+> foreign event still passes sead-core's normal signature-verification path.
+> Genuinely invalid events are rejected and dropped, never retried.
+
 ### Start
 
 Pull the latest images, then start the stack:
