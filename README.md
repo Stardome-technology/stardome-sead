@@ -9,33 +9,38 @@ produce tokens for IPFS pinning.
 
 ## Architecture
 
-- **sead-core** — event store, DAG maintenance, org/edge key resolution
-- **edge-service** — ingest, receipt, commit, and retrieval APIs
-- **storage-gateway** — evidence artifact distribution (IPFS-backed)
-- **auth-service** — token verification for external services
-- **verifier-service** — independent verification of event chains
-- **source-data-service** — controlled disclosure of source data
-- **sead-sync** — event synchronization across nodes via p2p pubsub
+- **gateway** — single public HTTPS entry point (Go). Terminates TLS, enforces
+  auth, validates requests, and routes to the internal C++ services over gRPC.
+  `auth-service` and `verifier-service` are collapsed into the gateway.
+- **sead-core** — event store, DAG maintenance, org/edge key resolution (gRPC-only)
+- **edge-service** — ingest, receipt, commit, and retrieval APIs (gRPC-only)
+- **storage-gateway** — evidence artifact distribution (IPFS-backed) (gRPC-only)
+- **source-data-service** — controlled disclosure of source data (gRPC-only)
+- **sead-sync** — event synchronization across nodes via p2p pubsub (gRPC-only)
 
-> **⚠️ Public port convention:** The published host ports `30080` (sead-core)
-> and `30090` (sead-sync) are **standardized across all public deployments**
-> and must not be changed in this compose file. If you need different ports,
-> override them via environment variables or maintain your own copy of the
-> compose file. The internal container ports (`8080`, `8081`–`8085`, `8090`)
-> are private to the stack and can be freely customized.
+> **Go Gateway migration (phase 4.4):** the C++ services are **gRPC-only** and
+> publish no public HTTP ports. They are reachable only on the internal
+> `sead-network` bridge via the Go gateway. `auth-service` and `verifier-service`
+> are collapsed into the gateway (no longer standalone services). Health is
+> probed via `grpc.health.v1.Health`.
+
+> **⚠️ Public port convention:** The published host port `30080` (gateway) is
+> **standardized across all public deployments** and must not be changed in this
+> compose file. If you need a different port, override it via environment
+> variables or maintain your own copy of the compose file. The internal gRPC
+> ports (`50051`–`50055`) are private to the stack and can be freely customized.
 
 ## Public ports to open
 
 For an integrator deploying this stack, these are the **public** host ports that
 must be reachable from outside (open in the firewall / cloud security group):
 
-- **`30080/tcp`** — sead-core HTTP API (event store, org/edge key resolution, cross-org event fetch)
-- **`30090/tcp`** — sead-sync (p2p event synchronization)
+- **`30080/tcp`** — gateway HTTPS API (all public endpoints: event store, org/edge
+  key resolution, cross-org event fetch, ingest, receipts, verification)
 
-All other service ports (`8080`, `8081`–`8085`, `8090`) are **private** to the
-Docker network and should **not** be exposed publicly. If you only need local
-access, you can leave `30080`/`30090` closed to the internet and reach them via
-`localhost`.
+All other service ports (`50051`–`50055`) are **private** to the Docker network
+and should **not** be exposed publicly. If you only need local access, you can
+leave `30080` closed to the internet and reach it via `localhost`.
 
 ---
 
@@ -91,6 +96,8 @@ EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
 SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
 SYNC_P2P_URL=http://<this-node-lan-ip>:30089
+# Gateway auth (required in production — see the gateway README)
+GATEWAY_AUTH_SECRET=<shared-secret>
 # Optional: orgs this node observes for cross-node sync (comma-separated
 # 64-hex org_ids; the node's own org is always observed).
 # SYNC_OBSERVE_ORGS=<other_org_id_hex>,<another_org_id_hex>
@@ -126,7 +133,7 @@ Pull the latest images, then start the stack:
 docker compose -f docker-compose.remote.yml pull
 docker compose -f docker-compose.remote.yml up -d
 
-# Verify all services are healthy
+# Verify the gateway is healthy
 curl http://localhost:30080/health
 ```
 
@@ -135,27 +142,38 @@ curl http://localhost:30080/health
 | Variable | Service | Required | Default | Description |
 |----------|---------|----------|---------|-------------|
 | `LOG_LEVEL` | all | No | `info` | Logging verbosity |
-| `SEAD_CORE_PORT` | sead-core | No | `8080` | Internal container port (private) |
 | `EDGE_ORG_ID` | edge-service | **†** | — | Organization ID (hex) |
 | `EDGE_ID` | edge-service | **†** | — | Edge device ID (hex) |
 | `EDGE_SIGNING_KEY` | edge-service | **†** | — | Edge XMSS private key (hex) |
 | `EDGE_ORG_SIGNING_KEY` | edge-service | **†** | — | Org XMSS key for auth tokens (hex) |
 | `EDGE_ORG_PUBLIC_KEY` | edge-service | No | — | Org XMSS public key (hex) |
 | `EDGE_TOKEN_TTL` | edge-service | No | `300` | Auth token TTL in seconds |
-| `EDGE_STORAGE_GATEWAY_URL` | edge-service | No | `http://localhost:8082` | Storage gateway URL |
+| `EDGE_STORAGE_GATEWAY_URL` | edge-service | No | `storage-gateway:50052` | Storage gateway gRPC target |
 | `EDGE_WATCHDOG_INTERVAL_SEC` | edge-service | No | `30` | Watchdog interval |
 | `EDGE_COMMIT_STRATEGY` | edge-service | No | `single` | `single` or `batch` |
 | `EDGE_BATCH_FLUSH_INTERVAL_SEC` | edge-service | No | `300` | Batch flush interval |
-| `STORAGE_GATEWAY_PORT` | storage-gateway | No | `8082` | Internal container port (private) |
 | `IPFS_API_BASE_URL` | storage-gateway | No | `https://ipfs.stardome.cloud` | IPFS API endpoint |
-| `AUTH_SKEW_TOLERANCE_SEC` | auth-service | No | `30` | Token expiry skew tolerance |
-| `AUTH_KEY_CACHE_TTL_SEC` | auth-service | No | `60` | Org key cache TTL |
-| `VERIFIER_SOURCE_DATA_BASE_URL` | verifier-service | No | `http://source-data-service:8085` | Source-data URL |
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
 | `SYNC_ORG_ID` | sead-sync | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; p2p sync identity |
 | `SYNC_P2P_URL` | sead-sync | **†** | — | p2p URL at the **node's LAN/mesh IP** (e.g. `http://192.168.60.1:30089`); required for inter-node sync |
 | `SYNC_OBSERVE_ORGS` | sead-sync | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
-| `SEAD_CORE_PUBLIC_PORT` | all | No | `30080` | **Public** — published host port for cross-org event fetch |
+| `GATEWAY_AUTH_SECRET` | gateway | **†** | — | Shared secret for Bearer token auth (required in production) |
+| `GATEWAY_TLS_ENABLED` | gateway | No | `false` | Enable TLS termination |
+| `GATEWAY_TLS_CERT` / `GATEWAY_TLS_KEY` | gateway | No | — | TLS cert/key paths (required if TLS enabled) |
+| `GATEWAY_AUTH_CBOR_ENABLED` | gateway | No | `true` | CBOR auth-token verification (collapsed from auth-service) |
+| `GATEWAY_METRICS_ENABLED` | gateway | No | `true` | Enable `/metrics` endpoint |
+| `GATEWAY_HEALTH_BACKENDS` | gateway | No | `sead-core,edge-service,storage,source-data` | Backends the gateway `/health` probes |
+| `SVC_SEAD_CORE_GRPC` | gateway | No | `sead-core:50051` | sead-core gRPC target |
+| `SVC_EDGE_SERVICE_GRPC` | gateway | No | `edge-service:50055` | edge-service gRPC target |
+| `SVC_STORAGE_GRPC` | gateway | No | `storage-gateway:50052` | storage-gateway gRPC target |
+| `SVC_SOURCE_DATA_GRPC` | gateway | No | `source-data-service:50053` | source-data-service gRPC target |
+| `GATEWAY_GRPC_PORT` | gateway | No | `50054` | Gateway Sync gRPC port |
+
+> **Gateway config:** the full gateway configuration (TLS, auth, timeouts,
+> gRPC targets) is documented in the
+> [stardome-sead-gateway](https://github.com/Stardome-technology/stardome-sead-gateway)
+> README. The gateway is the single public surface; the C++ services are
+> gRPC-only and publish no public HTTP ports.
 
 ---
 
@@ -309,8 +327,10 @@ docker run --rm -v "$(pwd):/data" \
   --out-file /data/envelope.hex
 
 # POST the file contents as the JSON value
+# (the gateway requires a Bearer token — set GATEWAY_AUTH_SECRET in .env)
 curl -X POST http://localhost:30080/events \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
 
@@ -361,11 +381,12 @@ The `--not-before` and `--not-after` default to `now` and `0` respectively
 if omitted. The `not_before`/`not_after` here are the edge's authorization
 window — independent of the org genesis values.
 
-POST the output hex to sead-core:
+POST the output hex to sead-core (via the gateway):
 
 ```bash
 curl -X POST http://localhost:30080/events \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
 
@@ -418,90 +439,59 @@ builds this for you, but here is what it contains:
 ### Verify
 
 ```bash
-curl http://localhost:30080/orgs/<org_id_hex>
+curl http://localhost:30080/orgs/<org_id_hex> \
+  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET"
 # Expected: {"status":"active","org_pk_hex":"<pk>"}
 
-curl http://localhost:30080/edges/<org_id_hex>/<edge_id_hex>
+curl http://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
+  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET"
 # Expected: {"status":"authorized","edge_pk_hex":"<pk>"}
 ```
 
 ---
 
-## Step 4 — Generate auth tokens (IPFS pinning)
+## Step 4 — IPFS pinning
 
-The auth stack only verifies tokens — it never generates them. The
-**edge-service** container holds the org signing key in memory (loaded
-from `EDGE_ORG_SIGNING_KEY` / `EDGE_ORG_SIGNING_KEY_FILE` at startup)
-and exposes a `POST /auth/token` API.
+In the Go Gateway architecture, the **gateway** is the single public surface
+for IPFS pinning. The `auth-service` and `verifier-service` are collapsed into
+the gateway, and the C++ services are gRPC-only (no public HTTP ports).
 
-> **✅  XMSS index persistence:** The edge-service now stores the org
-> signing key's current one-time index in a `key_index` SQLite table
-> alongside the receipt store (both in the `sead_data` volume). On any
-> container restart (crash, `docker compose restart`, or `down` + `up`),
-> the index is reloaded from the database, so token generation resumes
-> where it left off. The `sead_data` volume **must** persist across
-> restarts — this is the default for Docker volumes. Using
-> `docker compose down -v` destroys both the receipt store and the key
-> index; in that case, generate a fresh keypair.
+### Pin an artifact
 
-### Generate an org-wide token (no payload binding)
+The gateway exposes `POST /pin` (native Go handler). It requires a valid CBOR
+auth token for the target org, passed in the request body:
 
 ```bash
-# The edge-service must be running. Generate a token with no expiry
-# and no payload_hash — reusable across all artifacts.
-curl -X POST http://localhost:8081/auth/token \
+curl -X POST http://localhost:30080/pin \
   -H "Content-Type: application/json" \
-  -d '{"ttl": 0}'
+  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET" \
+  -d '{
+    "artifact": "<artifact_hex>",
+    "auth_token": "<base64url-encoded CBOR auth token>"
+  }'
 
 # Response:
 # {
-#   "token": "<base64url-encoded CBOR>",
-#   "expiry": 0,
-#   "note": "org-wide token — no expiry, no payload binding. Use with caution."
+#   "cid": "<ipfs-cid>",
+#   "payload_hash": "<hex>",
+#   "status": "pinned"
 # }
 ```
 
-The `ttl` field is optional (default `0` = no expiry). Set a positive
-value in seconds for a time-limited token:
+Retrieve a pinned artifact by its payload hash:
 
 ```bash
-curl -X POST http://localhost:8081/auth/token \
-  -H "Content-Type: application/json" \
-  -d '{"ttl": 3600}'
-
-# Response includes the current index:
-# {
-#   "token": "...",
-#   "expiry": 3600,
-#   "current_index": 1
-# }
+curl http://localhost:30080/cid/<payload_hash_hex> \
+  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET"
 ```
 
-### Inspect and manage the key index
-
-The edge-service provides two admin endpoints for the key index:
-
-```bash
-# Query current index state
-curl http://localhost:8081/auth/key-index
-# Response: {"key_id": "<hex>", "current_index": <uint>, "persisted": true}
-
-# Reset index to 0 (⚠️  use with caution — only if you are sure)
-curl -X POST http://localhost:8081/auth/key-index/reset
-# Response: {"key_id": "<hex>", "current_index": 0, "status": "reset"}
-```
-
-### Use the token
-
-```bash
-TOKEN=$(curl -s http://localhost:8081/auth/token \
-  -H "Content-Type: application/json" \
-  -d '{"ttl": 3600}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
-
-curl -X POST https://ipfs.stardome.cloud/api/v0/add \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "file=@endorse_att.bin"
-```
+> **Token minting:** the edge-service auto-generates per-pin auth tokens
+> internally (signed by the org XMSS key) when it commits an artifact and
+> pins it to IPFS via the storage gateway over gRPC. The standalone
+> `POST /auth/token` HTTP endpoint on edge-service is **removed** in the
+> Go Gateway migration — edge-service is gRPC-only. For the IPFS auth
+> stack deployment (minimal sead-core + gateway), see
+> [stardome-ipfs](https://github.com/Stardome-technology/stardome-ipfs).
 
 ### Token structure
 
@@ -521,8 +511,8 @@ Token is **base64url-encoded** CBOR (`RFC 4648 §5`, no padding).
 > **Note:** The standalone `gen-token` CLI tool exists for build-time
 > testing but is **not recommended** for production use, because each
 > invocation loads the key from hex and always starts at index 0.
-> Always prefer the `POST /auth/token` API on a running edge-service
-> to ensure the XMSS one-time index advances correctly.
+> Prefer the edge-service's internal per-pin token generation to ensure
+> the XMSS one-time index advances correctly.
 
 ---
 

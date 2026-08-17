@@ -1,9 +1,14 @@
 # Remote VPS Deployment — SEAD Stack + Explorer + P2P
 
 This guide covers the **remote VPS** deployment topology, where the full SEAD
-stack (edge-service, storage-gateway, auth-service, verifier-service,
-source-data-service, sead-core, sead-sync), the **Explorer** (UI + API), and
-the **P2P** sidecar all run on a single remote VPS.
+stack (gateway, edge-service, storage-gateway, source-data-service, sead-core,
+sead-sync), the **Explorer** (UI + API), and the **P2P** sidecar all run on a
+single remote VPS.
+
+> **Go Gateway migration (phase 4.4):** the C++ services are **gRPC-only** and
+> publish no public HTTP ports. The **gateway** is the single public HTTPS
+> entry point. `auth-service` and `verifier-service` are collapsed into the
+> gateway (no longer standalone services).
 
 This differs from the a single-host demonstration setup which assumes
 the **broker running on the same device** as the edge-service and talking to it over
@@ -14,13 +19,12 @@ and reaches the VPS edge-service over the network as in real world deployments.
 graph TB
     subgraph "Remote VPS"
         subgraph "SEAD stack (sead-network)"
-            SC[sead-core :8080]
-            ES[edge-service :8081]
-            SG[storage-gateway :8082]
-            AU[auth-service :8083]
-            VR[verifier-service :8084]
-            SD[source-data-service :8085]
-            SY[sead-sync :8090]
+            GW[gateway :30080]
+            SC[sead-core :50051 gRPC]
+            ES[edge-service :50055 gRPC]
+            SG[storage-gateway :50052 gRPC]
+            SD[source-data-service :50053 gRPC]
+            SY[sead-sync :50054 gRPC]
         end
         subgraph "Explorer"
             UI[Explorer UI nginx :80]
@@ -37,14 +41,11 @@ graph TB
         BROWSER[Browser]
     end
 
-    BR -->|"POST /ingest, /auth/token"| NGINX
-    NGINX -->|proxy| ES
+    BR -->|"POST /ingest, /auth/verify"| NGINX
+    NGINX -->|proxy| GW
     BROWSER -->|"https://edge.example.com/"| NGINX
     NGINX -->|proxy /api| API
-    API -->|internal| SC
-    API -->|internal| ES
-    API -->|internal| SG
-    API -->|internal| VR
+    API -->|internal| GW
     OTH -->|"31001 tcp/udp + 30089"| P2P
     P2P -->|"POST /events/{topic}"| SC
     SY -->|"SYNC_P2P_URL"| P2P
@@ -68,23 +69,22 @@ graph TB
 ## 2. Ports to open on the VPS firewall
 
 > These are the **host** ports that must be reachable from outside. The
-> internal container ports (`8080`, `8081`–`8085`, `8090`) stay private to the
-> Docker network and are **not** exposed directly.
+> internal gRPC ports (`50051`–`50055`) stay private to the Docker network
+> and are **not** exposed directly.
 
 | Port | Transport | Service | Who needs it |
 |---|---|---|---|
 | **80** | TCP | nginx (HTTP → HTTPS redirect) | everyone |
-| **443** | TCP | nginx (TLS: Explorer UI + API + edge proxy) | everyone |
-| **30080** | TCP | sead-core HTTP API (cross-org event fetch) | other SEAD nodes |
+| **443** | TCP | nginx (TLS: Explorer UI + API + gateway proxy) | everyone |
+| **30080** | TCP | gateway HTTPS API (cross-org event fetch, ingest, verify) | other SEAD nodes, brokers |
 | **30089** | TCP | p2p HTTP API (`/health`, `/peers`, `/events/{topic}`) | sead-sync, other nodes |
 | **31001** | TCP | libp2p swarm (TCP) | other SEAD nodes |
 | **31001** | UDP | libp2p swarm (QUIC) | other SEAD nodes |
-| **30090** | TCP | sead-sync (p2p event sync) | other SEAD nodes |
 
-**Not exposed** (private to the Docker network): `8081` (edge-service),
-`8082` (storage-gateway), `8083` (auth-service), `8084` (verifier-service),
-`8085` (source-data-service), `8086` (Explorer API — reachable only via nginx
-`/api`), `3000` (Explorer UI — reachable only via nginx `/`).
+**Not exposed** (private to the Docker network): `50051` (sead-core),
+`50052` (storage-gateway), `50053` (source-data-service), `50054` (gateway
+Sync gRPC), `50055` (edge-service), `8086` (Explorer API — reachable only via
+nginx `/api`), `3000` (Explorer UI — reachable only via nginx `/`).
 
 ### Firewall example (UFW)
 
@@ -95,7 +95,6 @@ sudo ufw allow 30080/tcp
 sudo ufw allow 30089/tcp
 sudo ufw allow 31001/tcp
 sudo ufw allow 31001/udp
-sudo ufw allow 30090/tcp
 sudo ufw enable
 ```
 
@@ -121,6 +120,7 @@ EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
 SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
 SYNC_P2P_URL=http://<VPS-PUBLIC-IP>:30089   # VPS public IP, NOT http://p2p:30089
+GATEWAY_AUTH_SECRET=<shared-secret>         # required in production
 ```
 
 > **`SYNC_P2P_URL`** must use the VPS's **public IP** (or a private IP reachable
@@ -133,7 +133,7 @@ SYNC_P2P_URL=http://<VPS-PUBLIC-IP>:30089   # VPS public IP, NOT http://p2p:3008
 docker compose -f docker-compose.remote.yml pull
 docker compose -f docker-compose.remote.yml up -d
 
-# Verify
+# Verify the gateway is healthy
 curl http://localhost:30080/health
 curl http://localhost:30089/health
 ```
@@ -155,13 +155,12 @@ curl http://127.0.0.1:3000/
 ```
 
 Because the Explorer runs on the **same VPS** as the stack, its `.env` uses the
-internal Docker-network URLs:
+internal Docker-network URLs (via the gateway):
 
 ```bash
-SEAD_CORE_URL=http://sead-core:8080
-EDGE_SERVICE_URL=http://edge-service:8081
-STORAGE_GATEWAY_URL=http://storage-gateway:8082
-VERIFIER_URL=http://verifier:8084
+SEAD_CORE_URL=http://gateway:30080
+EDGE_SERVICE_URL=http://gateway:30080
+STORAGE_GATEWAY_URL=http://gateway:30080
 DATABASE_URL=postgresql://explorer:explorer@sead-explorer-db:5432/sead_explorer
 OBSERVER_ORG_ID=<observer_org_id_hex>
 OBSERVER_NODE_ID=<observer_node_id_hex>
@@ -204,8 +203,8 @@ Nginx terminates TLS on `443` and routes:
 
 - `/` → Explorer UI (nginx container on `3000`)
 - `/api` → Explorer API (FastAPI on `8086`)
-- `/ingest`, `/auth/token` → edge-service (`8081`) — **for remote brokers**
-- `/health` → edge-service health (optional)
+- `/ingest`, `/auth/verify` → gateway (`30080`) — **for remote brokers**
+- `/health` → gateway health (optional)
 
 ### 6.1 Install + TLS
 
@@ -254,11 +253,11 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # ── Edge-service: ingest (remote brokers) ──────────────────────────
+    # ── Gateway: ingest (remote brokers) ────────────────────────────────
     # Requires a valid org auth token (Bearer header) — verified by the
-    # edge-service itself against sead-core.
+    # gateway against sead-core.
     location /ingest {
-        proxy_pass http://127.0.0.1:8081;
+        proxy_pass http://127.0.0.1:30080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -267,11 +266,11 @@ server {
         proxy_read_timeout 600s;
     }
 
-    # ── Edge-service: token minting (remote brokers) ───────────────────
-    # Only POST /auth/token is exposed — the key-index admin endpoints stay
-    # internal (reachable via localhost:8081 only).
-    location = /auth/token {
-        proxy_pass http://127.0.0.1:8081;
+    # ── Gateway: auth verify (remote brokers) ───────────────────────────
+    # POST /auth/verify — verifies a CBOR auth token (collapsed from
+    # auth-service). The key-index admin endpoints are internal only.
+    location = /auth/verify {
+        proxy_pass http://127.0.0.1:30080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -279,9 +278,9 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # ── Edge-service health (optional, unauthenticated) ────────────────
+    # ── Gateway health (optional, unauthenticated) ──────────────────────
     location = /health {
-        proxy_pass http://127.0.0.1:8081/health;
+        proxy_pass http://127.0.0.1:30080/health;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
     }
@@ -301,8 +300,8 @@ sudo systemctl reload nginx
 
 ## 7. Point remote brokers at the VPS
 
-The broker reaches the edge-service via `SEAD_EDGE_URL`, which is used as a
-**base URL** — the broker appends `/ingest` and `/auth/token` itself.
+The broker reaches the gateway via `SEAD_EDGE_URL`, which is used as a
+**base URL** — the broker appends `/ingest` and `/auth/verify` itself.
 
 ```bash
 # stardome-sead-broker .env
@@ -314,14 +313,14 @@ SEAD_EDGE_URL=https://edge.example.com
 
 ### 7.1 How `/ingest` is authenticated
 
-The edge-service `/ingest` handler now **requires a valid org auth token** on
-every request. The caller sends the token as a `Bearer` header:
+The gateway `/ingest` handler **requires a valid org auth token** on every
+request. The caller sends the token as a `Bearer` header:
 
 ```
 Authorization: Bearer <base64url-encoded CBOR auth token>
 ```
 
-The edge-service:
+The gateway:
 1. Decodes and parses the token (CBOR).
 2. Resolves the org's public key from sead-core and verifies the XMSS signature.
 3. Checks expiry, scope (`ipfs_pin`), and (if present) `payload_hash` binding.
@@ -347,10 +346,10 @@ code change is needed in the broker `.env` beyond setting `SEAD_AUTH_TOKEN`:
 ```bash
 # stardome-sead-broker .env
 SEAD_EDGE_URL=https://edge.example.com
-SEAD_AUTH_TOKEN=<base64url-encoded CBOR auth token>   # from POST /auth/token
+SEAD_AUTH_TOKEN=<base64url-encoded CBOR auth token>
 ```
 
-> **Note on auto-generation:** because the edge now requires the token *on*
+> **Note on auto-generation:** because the gateway now requires the token *on*
 > ingest, the broker's auto-generation fallback (which needs the `payload_hash`
 > known only *after* ingest) is no longer compatible with an auth-requiring
 > edge. Use a pre-generated token (`SEAD_AUTH_TOKEN` or per-request
@@ -369,14 +368,10 @@ curl http://localhost:30089/health
 curl -k https://edge.example.com/health
 curl -k https://edge.example.com/api/v1/frontier
 
-# Edge proxy (from a remote broker host) — requires a valid auth token
-TOKEN=$(curl -s -X POST https://edge.example.com/auth/token \
-  -H "Content-Type: application/json" -d '{"ttl": 3600}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
-
+# Gateway (from a remote broker host) — requires a valid auth token
 curl -X POST https://edge.example.com/ingest \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: Bearer $SEAD_AUTH_TOKEN" \
   -d '{"module_id":"<hex>","org_id":"<hex>","edge_id":"<hex>","artifact":"<hex>"}'
 
 # P2P swarm listening
