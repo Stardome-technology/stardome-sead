@@ -44,6 +44,7 @@ services:
       - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-30}
       - EDGE_COMMIT_STRATEGY=${EDGE_COMMIT_STRATEGY:-single}
       - EDGE_BATCH_FLUSH_INTERVAL_SEC=${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}
+      # Optional — auto-resolved from sead-core at startup if unset; set to override
       - EDGE_AUTHORIZATION_EVENT_ID=${EDGE_AUTHORIZATION_EVENT_ID:-}
     command: ["edge-service", "--port", "50055", "--db", "/data/edge.db",
               "--org-id", "${EDGE_ORG_ID:?error}",

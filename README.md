@@ -152,6 +152,7 @@ curl http://localhost:30080/health
 | `EDGE_WATCHDOG_INTERVAL_SEC` | edge-service | No | `30` | Watchdog interval |
 | `EDGE_COMMIT_STRATEGY` | edge-service | No | `single` | `single` or `batch` |
 | `EDGE_BATCH_FLUSH_INTERVAL_SEC` | edge-service | No | `300` | Batch flush interval |
+| `EDGE_AUTHORIZATION_EVENT_ID` | edge-service | No | *(auto)* | Event_id (64 hex) of the `edge_authorization` that activated this edge, written into each `edge_commit`'s `dependency_refs` so commits resolve to their authorization graph on-chain. **Optional** — if unset, edge-service auto-resolves it from sead-core at startup; set it to override |
 | `IPFS_API_BASE_URL` | storage-gateway | No | `https://ipfs.stardome.cloud` | IPFS API endpoint |
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
 | `SYNC_ORG_ID` | sead-sync | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; p2p sync identity |
