@@ -133,8 +133,8 @@ Pull the latest images, then start the stack:
 docker compose -f docker-compose.remote.yml pull
 docker compose -f docker-compose.remote.yml up -d
 
-# Verify the gateway is healthy
-curl http://localhost:30080/health
+# Verify the gateway is healthy (TLS on by default; -k for self-signed)
+curl -k https://localhost:30080/health
 ```
 
 ### Configuration reference
@@ -159,8 +159,8 @@ curl http://localhost:30080/health
 | `SYNC_P2P_URL` | sead-sync | **†** | — | p2p URL at the **node's LAN/mesh IP** (e.g. `http://192.168.60.1:30089`); required for inter-node sync |
 | `SYNC_OBSERVE_ORGS` | sead-sync | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
 | `GATEWAY_AUTH_SECRET` | gateway | **†** | — | Shared secret for Bearer token auth (required in production) |
-| `GATEWAY_TLS_ENABLED` | gateway | No | `false` | Enable TLS termination |
-| `GATEWAY_TLS_CERT` / `GATEWAY_TLS_KEY` | gateway | No | — | TLS cert/key paths (required if TLS enabled) |
+| `GATEWAY_TLS_ENABLED` | gateway | No | `true` | Enable TLS termination (set false to disable) |
+| `GATEWAY_TLS_CERT` / `GATEWAY_TLS_KEY` | gateway | No | `/etc/gateway/certs/server.crt` / `.key` | TLS cert/key paths (mounted from `./secrets`). **Production/cross-org:** use a public cert (Let's Encrypt). **Isolated/own-party deployment:** self-signed is fine (see the gateway README for the distinction) |
 | `GATEWAY_AUTH_CBOR_ENABLED` | gateway | No | `true` | CBOR auth-token verification (collapsed from auth-service) |
 | `GATEWAY_METRICS_ENABLED` | gateway | No | `true` | Enable `/metrics` endpoint |
 | `GATEWAY_HEALTH_BACKENDS` | gateway | No | `sead-core,edge-service,storage,source-data` | Backends the gateway `/health` probes |
@@ -329,7 +329,7 @@ docker run --rm -v "$(pwd):/data" \
 
 # POST the file contents as the JSON value
 # (the gateway requires a Bearer token — set GATEWAY_AUTH_SECRET in .env)
-curl -X POST http://localhost:30080/events \
+curl -k -X POST https://localhost:30080/events \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $GATEWAY_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
@@ -385,7 +385,7 @@ window — independent of the org genesis values.
 POST the output hex to sead-core (via the gateway):
 
 ```bash
-curl -X POST http://localhost:30080/events \
+curl -k -X POST https://localhost:30080/events \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $GATEWAY_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
@@ -440,11 +440,11 @@ builds this for you, but here is what it contains:
 ### Verify
 
 ```bash
-curl http://localhost:30080/orgs/<org_id_hex> \
+curl -k https://localhost:30080/orgs/<org_id_hex> \
   -H "Authorization: Bearer $GATEWAY_AUTH_SECRET"
 # Expected: {"status":"active","org_pk_hex":"<pk>"}
 
-curl http://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
+curl -k https://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
   -H "Authorization: Bearer $GATEWAY_AUTH_SECRET"
 # Expected: {"status":"authorized","edge_pk_hex":"<pk>"}
 ```
@@ -463,7 +463,7 @@ The gateway exposes `POST /pin` (native Go handler). It requires a valid CBOR
 auth token for the target org, passed in the request body:
 
 ```bash
-curl -X POST http://localhost:30080/pin \
+curl -k -X POST https://localhost:30080/pin \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $GATEWAY_AUTH_SECRET" \
   -d '{
@@ -482,7 +482,7 @@ curl -X POST http://localhost:30080/pin \
 Retrieve a pinned artifact by its payload hash:
 
 ```bash
-curl http://localhost:30080/cid/<payload_hash_hex> \
+curl -k https://localhost:30080/cid/<payload_hash_hex> \
   -H "Authorization: Bearer $GATEWAY_AUTH_SECRET"
 ```
 

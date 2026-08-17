@@ -10,7 +10,7 @@ single remote VPS.
 > entry point. `auth-service` and `verifier-service` are collapsed into the
 > gateway (no longer standalone services).
 
-This differs from the a single-host demonstration setup which assumes
+This differs from a single-host deployment which assumes
 the **broker running on the same device** as the edge-service and talking to it over
 the Docker network (`http://host.docker.internal:8081`). Here the broker still mimics the integrator firmware
 and reaches the VPS edge-service over the network as in real world deployments.
@@ -53,9 +53,9 @@ graph TB
 
 ---
 
-## 1. Single-host demo setup vs real deployment
+## 1. Single-host deployment vs remote VPS
 
-| Concern | Single-host (demo) | Remote VPS (this guide) |
+| Concern | Single-host (co-located) | Remote VPS (this guide) |
 |---|---|---|
 | Broker → edge | `http://host.docker.internal:8081` (same host) | `https://edge.example.com` (via nginx) |
 | Edge-service exposure | Private Docker network only | Public via nginx (TLS) |
@@ -134,7 +134,7 @@ docker compose -f docker-compose.remote.yml pull
 docker compose -f docker-compose.remote.yml up -d
 
 # Verify the gateway is healthy
-curl http://localhost:30080/health
+curl -k https://localhost:30080/health
 curl http://localhost:30089/health
 ```
 
@@ -361,7 +361,7 @@ SEAD_AUTH_TOKEN=<base64url-encoded CBOR auth token>
 
 ```bash
 # Stack
-curl http://localhost:30080/health
+curl -k https://localhost:30080/health
 curl http://localhost:30089/health
 
 # Explorer (via nginx)

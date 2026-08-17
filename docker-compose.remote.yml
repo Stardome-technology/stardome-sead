@@ -142,11 +142,13 @@ services:
     image: ghcr.io/stardome-technology/stardome-sead-gateway:latest
     ports:
       - "30080:30080"
+    volumes:
+      - ./secrets:/etc/gateway/certs:ro
     environment:
       - GATEWAY_LISTEN_ADDR=${GATEWAY_LISTEN_ADDR:-:30080}
-      - GATEWAY_TLS_ENABLED=${GATEWAY_TLS_ENABLED:-false}
-      - GATEWAY_TLS_CERT=${GATEWAY_TLS_CERT:-}
-      - GATEWAY_TLS_KEY=${GATEWAY_TLS_KEY:-}
+      - GATEWAY_TLS_ENABLED=${GATEWAY_TLS_ENABLED:-true}
+      - GATEWAY_TLS_CERT=${GATEWAY_TLS_CERT:-/etc/gateway/certs/server.crt}
+      - GATEWAY_TLS_KEY=${GATEWAY_TLS_KEY:-/etc/gateway/certs/server.key}
       - GATEWAY_AUTH_ENABLED=${GATEWAY_AUTH_ENABLED:-true}
       - GATEWAY_AUTH_SECRET=${GATEWAY_AUTH_SECRET:-}
       - GATEWAY_EDGE_TOKENS=${GATEWAY_EDGE_TOKENS:-}
@@ -177,7 +179,7 @@ services:
       source-data-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:30080/health"]
+      test: ["CMD", "wget", "--no-check-certificate", "-qO-", "https://localhost:30080/health"]
       interval: 15s
       timeout: 5s
       retries: 3
