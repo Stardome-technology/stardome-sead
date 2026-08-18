@@ -158,7 +158,7 @@ curl -k https://localhost:30080/health
 | `SYNC_ORG_ID` | sead-sync | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; p2p sync identity |
 | `SYNC_P2P_URL` | sead-sync | **†** | — | p2p URL at the **node's LAN/mesh IP** (e.g. `http://192.168.60.1:30089`); required for inter-node sync |
 | `SYNC_OBSERVE_ORGS` | sead-sync | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
-| `GATEWAY_AUTH_SECRET` | gateway | **†** | — | Shared secret for Bearer token auth (required in production) |
+| `GATEWAY_AUTH_SECRET` | gateway | **†** | — | Shared secret the gateway requires as `Authorization: Bearer <value>` on its public HTTPS endpoints. It guards the gateway's **public** API (the gRPC calls between the internal C++ services and `sead-sync` do **not** use it). **Empty (`""`) disables auth** — the gateway then accepts any request with no token, which is only safe for a localhost/isolated node; any **non-empty** value becomes a hard, single accepted Bearer (not "any string"). Set it (e.g. `openssl rand -hex 32`) whenever `:30080` could be reached beyond your own host |
 | `GATEWAY_TLS_ENABLED` | gateway | No | `true` | Enable TLS termination (set false to disable) |
 | `GATEWAY_TLS_CERT` / `GATEWAY_TLS_KEY` | gateway | No | `/etc/gateway/certs/server.crt` / `.key` | TLS cert/key paths (mounted from `./secrets`). **Production/cross-org:** use a public cert (Let's Encrypt). **Isolated/own-party deployment:** self-signed is fine (see the gateway README for the distinction) |
 | `GATEWAY_AUTH_CBOR_ENABLED` | gateway | No | `true` | CBOR auth-token verification (collapsed from auth-service) |
