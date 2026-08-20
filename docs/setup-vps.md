@@ -11,9 +11,9 @@ single remote VPS.
 > gateway (no longer standalone services).
 
 This differs from a single-host deployment which assumes
-the **broker running on the same device** as the edge-service and talking to it over
-the Docker network (`http://host.docker.internal:8081`). Here the broker still mimics the integrator firmware
-and reaches the VPS edge-service over the network as in real world deployments.
+the **broker running on the same device** as the stack and talking to the gateway
+over `host.docker.internal:30080`. Here the broker still mimics the integrator firmware
+and reaches the VPS gateway over the network as in real world deployments.
 
 ```mermaid
 graph TB
@@ -57,7 +57,7 @@ graph TB
 
 | Concern | Single-host (co-located) | Remote VPS (this guide) |
 |---|---|---|
-| Broker → edge | `http://host.docker.internal:8081` (same host) | `https://edge.example.com` (via nginx) |
+| Broker → edge | `https://host.docker.internal:30080` (gateway, same host) | `https://edge.example.com` (via nginx) |
 | Edge-service exposure | Private Docker network only | Public via nginx (TLS) |
 | Explorer UI | `http://localhost:3000` | `https://edge.example.com/` |
 | Explorer API | `http://localhost:8086` | `https://edge.example.com/api` (optional) |
