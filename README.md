@@ -97,7 +97,7 @@ EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
 SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
 SYNC_P2P_URL=http://<this-node-lan-ip>:30089
 # Gateway auth (required in production — see the gateway README)
-GATEWAY_AUTH_SECRET=<shared-secret>
+SEAD_AUTH_SECRET=<shared-secret>
 # Optional: orgs this node observes for cross-node sync (comma-separated
 # 64-hex org_ids; the node's own org is always observed).
 # SYNC_OBSERVE_ORGS=<other_org_id_hex>,<another_org_id_hex>
@@ -158,7 +158,7 @@ curl -k https://localhost:30080/health
 | `SYNC_ORG_ID` | sead-sync | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; p2p sync identity |
 | `SYNC_P2P_URL` | sead-sync | **†** | — | p2p URL at the **node's LAN/mesh IP** (e.g. `http://192.168.60.1:30089`); required for inter-node sync |
 | `SYNC_OBSERVE_ORGS` | sead-sync | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
-| `GATEWAY_AUTH_SECRET` | gateway | **†** | — | Shared secret the gateway requires as `Authorization: Bearer <value>` on its public HTTPS endpoints. It guards the gateway's **public** API (the gRPC calls between the internal C++ services and `sead-sync` do **not** use it). **Empty (`""`) disables auth** — the gateway then accepts any request with no token, which is only safe for a localhost/isolated node; any **non-empty** value becomes a hard, single accepted Bearer (not "any string"). Set it (e.g. `openssl rand -hex 32`) whenever `:30080` could be reached beyond your own host |
+| `SEAD_AUTH_SECRET` | gateway | **†** | — | Shared secret the gateway requires as `Authorization: Bearer <value>` on its public HTTPS endpoints. It guards the gateway's **public** API (the gRPC calls between the internal C++ services and `sead-sync` do **not** use it). **Empty (`""`) disables auth** — the gateway then accepts any request with no token, which is only safe for a localhost/isolated node; any **non-empty** value becomes a hard, single accepted Bearer (not "any string"). Set it (e.g. `openssl rand -hex 32`) whenever `:30080` could be reached beyond your own host |
 | `GATEWAY_TLS_ENABLED` | gateway | No | `true` | Enable TLS termination (set false to disable) |
 | `GATEWAY_TLS_CERT` / `GATEWAY_TLS_KEY` | gateway | No | `/etc/gateway/certs/server.crt` / `.key` | TLS cert/key paths (mounted from `./secrets`). **Production/cross-org:** use a public cert (Let's Encrypt). **Isolated/own-party deployment:** self-signed is fine (see the gateway README for the distinction) |
 | `GATEWAY_AUTH_CBOR_ENABLED` | gateway | No | `true` | CBOR auth-token verification (collapsed from auth-service) |
@@ -328,10 +328,10 @@ docker run --rm -v "$(pwd):/data" \
   --out-file /data/envelope.hex
 
 # POST the file contents as the JSON value
-# (the gateway requires a Bearer token — set GATEWAY_AUTH_SECRET in .env)
+# (the gateway requires a Bearer token — set SEAD_AUTH_SECRET in .env)
 curl -k -X POST https://localhost:30080/events \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET" \
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
 
@@ -387,7 +387,7 @@ POST the output hex to sead-core (via the gateway):
 ```bash
 curl -k -X POST https://localhost:30080/events \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET" \
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
 
@@ -441,11 +441,11 @@ builds this for you, but here is what it contains:
 
 ```bash
 curl -k https://localhost:30080/orgs/<org_id_hex> \
-  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET"
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 # Expected: {"status":"active","org_pk_hex":"<pk>"}
 
 curl -k https://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
-  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET"
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 # Expected: {"status":"authorized","edge_pk_hex":"<pk>"}
 ```
 
@@ -465,7 +465,7 @@ auth token for the target org, passed in the request body:
 ```bash
 curl -k -X POST https://localhost:30080/pin \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET" \
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d '{
     "artifact": "<artifact_hex>",
     "auth_token": "<base64url-encoded CBOR auth token>"
@@ -483,7 +483,7 @@ Retrieve a pinned artifact by its payload hash:
 
 ```bash
 curl -k https://localhost:30080/cid/<payload_hash_hex> \
-  -H "Authorization: Bearer $GATEWAY_AUTH_SECRET"
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 ```
 
 > **Token minting:** the edge-service auto-generates per-pin auth tokens

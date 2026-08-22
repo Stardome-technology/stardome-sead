@@ -120,7 +120,7 @@ EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
 SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
 SYNC_P2P_URL=http://<VPS-PUBLIC-IP>:30089   # VPS public IP, NOT http://p2p:30089
-GATEWAY_AUTH_SECRET=<shared-secret>         # required in production
+SEAD_AUTH_SECRET=<shared-secret>         # required in production
 ```
 
 > **`SYNC_P2P_URL`** must use the VPS's **public IP** (or a private IP reachable
