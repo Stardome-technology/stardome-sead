@@ -340,12 +340,15 @@ this token automatically (see below).
 ### 7.2 Broker token flow
 
 The broker resolves the token (per-request `auth_token` → `SEAD_AUTH_SECRET`
+The broker resolves the token (per-request `auth_token` → `SEAD_AUTH_SECRET`
 env var) **before** calling `/ingest`, and sends it as a `Bearer` header. No
+code change is needed in the broker `.env` beyond setting `SEAD_AUTH_SECRET`:
 code change is needed in the broker `.env` beyond setting `SEAD_AUTH_SECRET`:
 
 ```bash
 # stardome-sead-broker .env
 SEAD_EDGE_URL=https://edge.example.com
+SEAD_AUTH_SECRET=<base64url-encoded CBOR auth token>
 SEAD_AUTH_SECRET=<base64url-encoded CBOR auth token>
 ```
 
