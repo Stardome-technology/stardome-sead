@@ -34,8 +34,8 @@ services:
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=edge-service
-      - EDGE_ORG_ID=${EDGE_ORG_ID:?error}
-      - EDGE_ID=${EDGE_ID:?error}
+      - EDGE_ORG_ID=${EDGE_ORG_ID:-}
+      - EDGE_ID=${EDGE_ID:-}
       - EDGE_SIGNING_KEY=${EDGE_SIGNING_KEY:-}
       - EDGE_ORG_SIGNING_KEY=${EDGE_ORG_SIGNING_KEY:-}
       - EDGE_ORG_PUBLIC_KEY=${EDGE_ORG_PUBLIC_KEY:-}
@@ -47,8 +47,8 @@ services:
       # Optional — auto-resolved from sead-core at startup if unset; set to override
       - EDGE_AUTHORIZATION_EVENT_ID=${EDGE_AUTHORIZATION_EVENT_ID:-}
     command: ["edge-service", "--port", "50055", "--db", "/data/edge.db",
-              "--org-id", "${EDGE_ORG_ID:?error}",
-              "--edge-id", "${EDGE_ID:?error}",
+              "--org-id", "${EDGE_ORG_ID:-}",
+              "--edge-id", "${EDGE_ID:-}",
               "--signing-key", "${EDGE_SIGNING_KEY}",
               "--org-signing-key", "${EDGE_ORG_SIGNING_KEY}",
               "--org-public-key", "${EDGE_ORG_PUBLIC_KEY}",
@@ -117,12 +117,12 @@ services:
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=sead-sync
-      - SYNC_ORG_ID=${SYNC_ORG_ID:?error}
+      - SYNC_ORG_ID=${SYNC_ORG_ID:-}
       - SYNC_P2P_URL=${SYNC_P2P_URL:-http://p2p:30089}
       - SYNC_INTERVAL=${SYNC_INTERVAL:-10}
       - SYNC_OBSERVE_ORGS=${SYNC_OBSERVE_ORGS:-}
     command: ["/bin/sh", "-c",
-              "ARGS=\"--gateway-url gateway:50054 --p2p-url ${SYNC_P2P_URL:-http://p2p:30089} --org-id ${SYNC_ORG_ID:?error} --sync-interval ${SYNC_INTERVAL:-10}\"; \
+              "ARGS=\"--gateway-url gateway:50054 --p2p-url ${SYNC_P2P_URL:-http://p2p:30089} --org-id ${SYNC_ORG_ID:-} --sync-interval ${SYNC_INTERVAL:-10}\"; \
                for o in $(echo ${SYNC_OBSERVE_ORGS} | tr ',' ' '); do \
                  [ -n \"$$o\" ] && ARGS=\"$$ARGS --observe-org $$o\"; \
                done; \
