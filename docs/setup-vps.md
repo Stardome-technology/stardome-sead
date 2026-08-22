@@ -339,20 +339,20 @@ this token automatically (see below).
 
 ### 7.2 Broker token flow
 
-The broker resolves the token (per-request `auth_token` → `SEAD_AUTH_TOKEN`
+The broker resolves the token (per-request `auth_token` → `SEAD_AUTH_SECRET`
 env var) **before** calling `/ingest`, and sends it as a `Bearer` header. No
-code change is needed in the broker `.env` beyond setting `SEAD_AUTH_TOKEN`:
+code change is needed in the broker `.env` beyond setting `SEAD_AUTH_SECRET`:
 
 ```bash
 # stardome-sead-broker .env
 SEAD_EDGE_URL=https://edge.example.com
-SEAD_AUTH_TOKEN=<base64url-encoded CBOR auth token>
+SEAD_AUTH_SECRET=<base64url-encoded CBOR auth token>
 ```
 
 > **Note on auto-generation:** because the gateway now requires the token *on*
 > ingest, the broker's auto-generation fallback (which needs the `payload_hash`
 > known only *after* ingest) is no longer compatible with an auth-requiring
-> edge. Use a pre-generated token (`SEAD_AUTH_TOKEN` or per-request
+> edge. Use a pre-generated token (`SEAD_AUTH_SECRET` or per-request
 > `auth_token`) — the recommended production flow.
 
 ---
