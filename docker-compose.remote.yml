@@ -150,7 +150,7 @@ services:
       - GATEWAY_TLS_CERT=${GATEWAY_TLS_CERT:-/etc/gateway/certs/server.crt}
       - GATEWAY_TLS_KEY=${GATEWAY_TLS_KEY:-/etc/gateway/certs/server.key}
       - GATEWAY_AUTH_ENABLED=${GATEWAY_AUTH_ENABLED:-true}
-      - GATEWAY_AUTH_SECRET=${GATEWAY_AUTH_SECRET:-}
+      - SEAD_AUTH_SECRET=${SEAD_AUTH_SECRET:-}
       - GATEWAY_EDGE_TOKENS=${GATEWAY_EDGE_TOKENS:-}
       - GATEWAY_AUTH_CBOR_ENABLED=${GATEWAY_AUTH_CBOR_ENABLED:-true}
       # Key resolution uses the SVC_SEAD_CORE_GRPC gRPC target
