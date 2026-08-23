@@ -137,6 +137,20 @@ docker compose -f docker-compose.remote.yml up -d
 curl -k https://localhost:30080/health
 ```
 
+> **⚠️ About `-k` in the curl examples below.** The `-k` flag disables TLS
+> certificate verification. It is used throughout this guide because the
+> **isolated/own-party** deployment uses a **self-signed** cert, which curl
+> would otherwise reject. For a **production/cross-org** deployment with a
+> **public cert** (e.g. Let's Encrypt), **drop `-k`** so the standard PKI
+> trust store verifies the gateway — or, for a private CA, replace `-k` with
+> `--cacert <ca.crt>` to trust that specific CA. Using `-k` against a public
+> cert silently disables the very verification the cert is meant to provide.
+>
+> The examples below use a `$CURL_TLS` variable so you can set it once per
+> shell: `export CURL_TLS="-k"` (self-signed/isolated) or
+> `export CURL_TLS=""` / `export CURL_TLS="--cacert /path/to/ca.crt"`
+> (public/private CA). The health check above keeps `-k` inline for brevity.
+
 ### Configuration reference
 
 | Variable | Service | Required | Default | Description |
@@ -329,7 +343,8 @@ docker run --rm -v "$(pwd):/data" \
 
 # POST the file contents as the JSON value
 # (the gateway requires a Bearer token — set SEAD_AUTH_SECRET in .env)
-curl -k -X POST https://localhost:30080/events \
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS -X POST https://localhost:30080/events \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
@@ -385,7 +400,8 @@ window — independent of the org genesis values.
 POST the output hex to sead-core (via the gateway):
 
 ```bash
-curl -k -X POST https://localhost:30080/events \
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS -X POST https://localhost:30080/events \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
@@ -440,11 +456,12 @@ builds this for you, but here is what it contains:
 ### Verify
 
 ```bash
-curl -k https://localhost:30080/orgs/<org_id_hex> \
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS https://localhost:30080/orgs/<org_id_hex> \
   -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 # Expected: {"status":"active","org_pk_hex":"<pk>"}
 
-curl -k https://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
+curl $CURL_TLS https://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
   -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 # Expected: {"status":"authorized","edge_pk_hex":"<pk>"}
 ```
@@ -463,7 +480,8 @@ The gateway exposes `POST /pin` (native Go handler). It requires a valid CBOR
 auth token for the target org, passed in the request body:
 
 ```bash
-curl -k -X POST https://localhost:30080/pin \
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS -X POST https://localhost:30080/pin \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d '{
@@ -482,7 +500,8 @@ curl -k -X POST https://localhost:30080/pin \
 Retrieve a pinned artifact by its payload hash:
 
 ```bash
-curl -k https://localhost:30080/cid/<payload_hash_hex> \
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS https://localhost:30080/cid/<payload_hash_hex> \
   -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 ```
 
