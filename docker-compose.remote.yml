@@ -169,6 +169,15 @@ services:
       - SVC_STORAGE_GRPC=${SVC_STORAGE_GRPC:-storage-gateway:50052}
       - SVC_SOURCE_DATA_GRPC=${SVC_SOURCE_DATA_GRPC:-source-data-service:50053}
       - GATEWAY_GRPC_PORT=${GATEWAY_GRPC_PORT:-50054}
+      # Cross-node sync fetch (Phase 8): peer gateways this gateway fetches
+      # missing events from over HTTPS. Comma-separated base URLs.
+      - GATEWAY_PEERS=${GATEWAY_PEERS:-}
+      - GATEWAY_PEER_TOKEN=${GATEWAY_PEER_TOKEN:-}
+      # Peer gateway TLS: set GATEWAY_PEER_TLS_INSECURE=true only for
+      # isolated/own-party deployments using self-signed certs; or set
+      # GATEWAY_PEER_CA_CERT to a PEM CA bundle for a private CA.
+      - GATEWAY_PEER_TLS_INSECURE=${GATEWAY_PEER_TLS_INSECURE:-false}
+      - GATEWAY_PEER_CA_CERT=${GATEWAY_PEER_CA_CERT:-}
     depends_on:
       sead-core:
         condition: service_healthy
