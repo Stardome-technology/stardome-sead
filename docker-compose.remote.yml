@@ -122,7 +122,7 @@ services:
       - SYNC_INTERVAL=${SYNC_INTERVAL:-10}
       - SYNC_OBSERVE_ORGS=${SYNC_OBSERVE_ORGS:-}
     command: ["/bin/sh", "-c",
-              "ARGS=\"--gateway-url gateway:50054 --p2p-url ${SYNC_P2P_URL:-http://p2p:30089} --org-id ${SYNC_ORG_ID:-} --sync-interval ${SYNC_INTERVAL:-10}\"; \
+              "ARGS=\"--sead-core-url sead-core:50051 --gateway-url gateway:50054 --p2p-url ${SYNC_P2P_URL:-http://p2p:30089} --org-id ${SYNC_ORG_ID:-} --sync-interval ${SYNC_INTERVAL:-10}\"; \
                for o in $(echo ${SYNC_OBSERVE_ORGS} | tr ',' ' '); do \
                  [ -n \"$$o\" ] && ARGS=\"$$ARGS --observe-org $$o\"; \
                done; \
