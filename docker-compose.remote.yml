@@ -41,7 +41,11 @@ services:
       - EDGE_ORG_PUBLIC_KEY=${EDGE_ORG_PUBLIC_KEY:-}
       - EDGE_TOKEN_TTL=${EDGE_TOKEN_TTL:-300}
       - EDGE_STORAGE_GATEWAY_URL=${EDGE_STORAGE_GATEWAY_URL:-storage-gateway:50052}
-      - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-30}
+      - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-1}
+      - EDGE_PIN_INTERVAL_SEC=${EDGE_PIN_INTERVAL_SEC:-30}
+      - EDGE_PIN_MAX_RETRIES=${EDGE_PIN_MAX_RETRIES:--1}
+      - EDGE_PIN_BACKOFF_BASE_SEC=${EDGE_PIN_BACKOFF_BASE_SEC:-30}
+      - EDGE_PIN_BACKOFF_CAP_SEC=${EDGE_PIN_BACKOFF_CAP_SEC:-86400}
       - EDGE_COMMIT_STRATEGY=${EDGE_COMMIT_STRATEGY:-single}
       - EDGE_BATCH_FLUSH_INTERVAL_SEC=${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}
       # Optional — auto-resolved from sead-core at startup if unset; set to override
@@ -55,9 +59,13 @@ services:
               "--token-ttl", "${EDGE_TOKEN_TTL:-300}",
               "--storage-gateway-url", "${EDGE_STORAGE_GATEWAY_URL:-storage-gateway:50052}",
               "--sead-core-url", "sead-core:50051",
-              "--watchdog-interval", "${EDGE_WATCHDOG_INTERVAL_SEC:-30}",
+              "--watchdog-interval", "${EDGE_WATCHDOG_INTERVAL_SEC:-1}",
               "--commit-strategy", "${EDGE_COMMIT_STRATEGY:-single}",
               "--batch-flush-interval", "${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}",
+              "--pin-interval", "${EDGE_PIN_INTERVAL_SEC:-30}",
+              "--pin-max-retries", "${EDGE_PIN_MAX_RETRIES:--1}",
+              "--pin-backoff-base", "${EDGE_PIN_BACKOFF_BASE_SEC:-30}",
+              "--pin-backoff-cap", "${EDGE_PIN_BACKOFF_CAP_SEC:-86400}",
               "--edge-authorization-event-id", "${EDGE_AUTHORIZATION_EVENT_ID}"]
     depends_on:
       sead-core:

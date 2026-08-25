@@ -163,7 +163,11 @@ curl -k https://localhost:30080/health
 | `EDGE_ORG_PUBLIC_KEY` | edge-service | No | — | Org XMSS public key (hex) |
 | `EDGE_TOKEN_TTL` | edge-service | No | `300` | Auth token TTL in seconds |
 | `EDGE_STORAGE_GATEWAY_URL` | edge-service | No | `storage-gateway:50052` | Storage gateway gRPC target |
-| `EDGE_WATCHDOG_INTERVAL_SEC` | edge-service | No | `30` | Watchdog interval |
+| `EDGE_WATCHDOG_INTERVAL_SEC` | edge-service | No | `1` | DAG commit (watchdog) cadence in seconds — near-realtime commit publish |
+| `EDGE_PIN_INTERVAL_SEC` | edge-service | No | `30` | IPFS pin loop cadence (independent, slow) |
+| `EDGE_PIN_MAX_RETRIES` | edge-service | No | `-1` | Max pin retries (`-1` = unlimited) |
+| `EDGE_PIN_BACKOFF_BASE_SEC` | edge-service | No | `30` | Pin retry exponential backoff base (seconds) |
+| `EDGE_PIN_BACKOFF_CAP_SEC` | edge-service | No | `86400` | Pin retry max backoff delay (seconds) |
 | `EDGE_COMMIT_STRATEGY` | edge-service | No | `single` | `single` or `batch` |
 | `EDGE_BATCH_FLUSH_INTERVAL_SEC` | edge-service | No | `300` | Batch flush interval |
 | `EDGE_AUTHORIZATION_EVENT_ID` | edge-service | No | *(auto)* | Event_id (64 hex) of the `edge_authorization` that activated this edge, written into each `edge_commit`'s `dependency_refs` so commits resolve to their authorization graph on-chain. **Optional** — if unset, edge-service auto-resolves it from sead-core at startup; set it to override |
