@@ -119,32 +119,39 @@ services:
     networks:
       - sead-network
 
-  sead-sync:
-    image: ghcr.io/stardome-technology/stardome-sead/sead-sync:latest
-    # No public ports — gRPC-only, reachable on sead-network via the gateway
+  gossip-node:
+    image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
+    # Option A (C2): own libp2p peer per node.
+    # - On the sead-network bridge so it reaches sead-core/gateway by name.
+    # - Publish the libp2p TCP port so other POCs reach this peer at the node's
+    #   LAN/mesh IP (e.g. /ip4/192.168.60.1/tcp/31002 and mDNS).
+    ports:
+      - "31002:31002/tcp"
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - SERVICE_NAME=sead-sync
-      - SYNC_ORG_ID=${SYNC_ORG_ID:-}
-      - SYNC_P2P_URL=${SYNC_P2P_URL:-http://p2p:30089}
-      - SYNC_INTERVAL=${SYNC_INTERVAL:-10}
-      - SYNC_OBSERVE_ORGS=${SYNC_OBSERVE_ORGS:-}
+      - SERVICE_NAME=gossip-node
+      - GOSSIP_ORG_ID=${GOSSIP_ORG_ID:-}
+      - GOSSIP_OBSERVE_ORGS=${GOSSIP_OBSERVE_ORGS:-}
+      - GOSSIP_LISTEN=${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002}
+      - GOSSIP_BOOTSTRAP=${GOSSIP_BOOTSTRAP:-}
+      - GOSSIP_HEARTBEAT_SEC=${GOSSIP_HEARTBEAT_SEC:-10}
+      - GOSSIP_CORE=${GOSSIP_CORE:-sead-core:50051}
+      - GOSSIP_GATEWAY=${GOSSIP_GATEWAY:-gateway:50054}
+      - GOSSIP_MDNS=${GOSSIP_MDNS:-true}
+      - GOSSIP_DHT=${GOSSIP_DHT:-true}
+      - GOSSIP_PNET=${GOSSIP_PNET:-false}
     command: ["/bin/sh", "-c",
-              "ARGS=\"--sead-core-url sead-core:50051 --gateway-url gateway:50054 --p2p-url ${SYNC_P2P_URL:-http://p2p:30089} --org-id ${SYNC_ORG_ID:-} --sync-interval ${SYNC_INTERVAL:-10}\"; \
-               for o in $(echo ${SYNC_OBSERVE_ORGS} | tr ',' ' '); do \
-                 [ -n \"$$o\" ] && ARGS=\"$$ARGS --observe-org $$o\"; \
+              "ARGS=\"--own-org ${GOSSIP_ORG_ID:-} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true}\"; \
+               for o in $(echo ${GOSSIP_OBSERVE_ORGS} | tr ',' ' '); do \
+                 [ -n \"$$o\" ] && ARGS=\"$$ARGS --orgs $$o\"; \
                done; \
-               exec sead-sync $$ARGS"]
+               [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; \
+               [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; \
+               exec gossip-node $$ARGS"]
     depends_on:
       gateway:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=gateway:50054"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    networks:
-      - sead-network
+    restart: unless-stopped
 
   gateway:
     image: ghcr.io/stardome-technology/stardome-sead-gateway:latest
