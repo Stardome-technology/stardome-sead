@@ -141,6 +141,13 @@ EOF
 > - The bootstrap peer can be shared out-of-band by any means (IP, DNS, a
 >   partner's node) — it does not have to be published in the SEAD DAG. The
 >   catalog is what makes an org's nodes *authoritatively* discoverable.
+> - **Bootstrap vs. catalog membership is an integrator decision.** A node you
+>   share as a bootstrap entry point is a value you **MAY** let a partner
+>   organization use for bootstrapping — it is **not** assumed to be part of
+>   the catalog set and publish flow. It may or may not be, depending on the
+>   integrator's choice: you can keep a **static bootstrap node** and update
+>   the frontier-dispatching nodes over time via catalogs, or use the same
+>   node(s) for both scopes. The two roles are independent.
 
 > **Cross-node sync (DAG-native auth replication)** — when a node observes
 > another org, foreign `edge_commit` events are validated only **after** their
