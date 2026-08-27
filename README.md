@@ -148,6 +148,13 @@ EOF
 >   integrator's choice: you can keep a **static bootstrap node** and update
 >   the frontier-dispatching nodes over time via catalogs, or use the same
 >   node(s) for both scopes. The two roles are independent.
+>
+> **Trust model:** bootstrapping is *transport only* — dialing a peer does not
+> mean trusting its org. Trust comes from the DAG (org genesis → edge
+> authorization → XMSS signatures), never from who you dialed. A bootstrap peer
+> can relay or withhold gossip (availability), but it cannot forge org-signed
+> events (integrity). Only catalog-listed, org-signed endpoints are
+> authoritative for an org's membership.
 
 > **Cross-node sync (DAG-native auth replication)** — when a node observes
 > another org, foreign `edge_commit` events are validated only **after** their
