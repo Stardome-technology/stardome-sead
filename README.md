@@ -46,6 +46,9 @@ must be reachable from outside (open in the firewall / cloud security group):
 
 - **`30080/tcp`** — gateway HTTPS API (all public endpoints: event store, org/edge
   key resolution, cross-org event fetch, ingest, receipts, verification)
+- **`31002/tcp`** — gossip-node libp2p peer (Stage C C2). The sync mesh dials
+  peer nodes on this port (`/ip4/<ip>/tcp/31002`). Must be reachable between
+  nodes for cross-node frontier dissemination + event fetch.
 
 All other service ports (`50051`–`50055`) are **private** to the Docker network
 and should **not** be exposed publicly. If you only need local access, you can
