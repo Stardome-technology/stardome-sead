@@ -156,6 +156,8 @@ services:
       gateway:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - sead-network
 
   gateway:
     image: ghcr.io/stardome-technology/stardome-sead-gateway:latest
