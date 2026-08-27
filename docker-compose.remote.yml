@@ -125,8 +125,12 @@ services:
     # - On the sead-network bridge so it reaches sead-core/gateway by name.
     # - Publish the libp2p TCP port so other POCs reach this peer at the node's
     #   LAN/mesh IP (e.g. /ip4/192.168.60.1/tcp/31002 and mDNS).
+    # - Persistent identity key (gossip_data volume) keeps the PeerId stable
+    #   across restarts so published bootstrap/catalog multiaddrs stay valid.
     ports:
       - "31002:31002/tcp"
+    volumes:
+      - gossip_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=gossip-node
@@ -140,8 +144,9 @@ services:
       - GOSSIP_MDNS=${GOSSIP_MDNS:-true}
       - GOSSIP_DHT=${GOSSIP_DHT:-true}
       - GOSSIP_PNET=${GOSSIP_PNET:-false}
+      - GOSSIP_IDENTITY_KEY_FILE=${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}
     command: ["/bin/sh", "-c",
-              "ARGS=\"--own-org ${GOSSIP_ORG_ID:-} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true}\"; \
+              "ARGS=\"--own-org ${GOSSIP_ORG_ID:-} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}\"; \
                for o in $(echo ${GOSSIP_OBSERVE_ORGS} | tr ',' ' '); do \
                  [ -n \"$$o\" ] && ARGS=\"$$ARGS --orgs $$o\"; \
                done; \
@@ -214,6 +219,7 @@ services:
 
 volumes:
   sead_data:
+  gossip_data:
 
 networks:
   sead-network:
