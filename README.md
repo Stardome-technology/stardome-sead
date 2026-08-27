@@ -122,6 +122,26 @@ EOF
 > libp2p multiaddrs (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also
 > auto-discover peers on the same subnet.
 
+> **How a node finds the orgs it observes — bootstrap vs. catalog.**
+> `GOSSIP_BOOTSTRAP` is only a **transport-level entry point**: it tells the
+> node which peer(s) to dial to join the mesh. It is **not** org-specific and
+> does **not** need to be a node of the observed org — any reachable peer in
+> the mesh works, because Gossipsub relays messages on the subscribed topics.
+> The *authoritative* answer to "which nodes represent org X, and at which
+> endpoints" is the org's **replication endpoint catalog** — an org-signed DAG
+> event (`replication_endpoint_catalog`, event_type 60) that each org publishes
+> to assert its own replication nodes. So:
+>
+> - **To be discoverable**, an org's operator must publish a catalog listing
+>   their nodes (node_id + reachable addresses). This is an org decision, like
+>   authorizing an edge — it is not inferred from the mesh.
+> - **To bootstrap**, a node only needs *one* reachable peer to join the mesh
+>   (via `GOSSIP_BOOTSTRAP`, mDNS, or DHT). Once in the mesh it can receive the
+>   observed orgs' catalogs and frontiers.
+> - The bootstrap peer can be shared out-of-band by any means (IP, DNS, a
+>   partner's node) — it does not have to be published in the SEAD DAG. The
+>   catalog is what makes an org's nodes *authoritatively* discoverable.
+
 > **Cross-node sync (DAG-native auth replication)** — when a node observes
 > another org, foreign `edge_commit` events are validated only **after** their
 > authorization graph (`edge_authorization` → `org_genesis`) is replicated to
@@ -192,7 +212,7 @@ curl -k https://localhost:30080/health
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
 | `GOSSIP_ORG_ID` | gossip-node | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; gossip-node's own org (always observed) |
 | `GOSSIP_OBSERVE_ORGS` | gossip-node | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
-| `GOSSIP_BOOTSTRAP` | gossip-node | No | — | Comma-separated libp2p multiaddrs of other nodes (`/ip4/<ip>/tcp/31002/p2p/<peerid>`) |
+| `GOSSIP_BOOTSTRAP` | gossip-node | No | — | Comma-separated libp2p multiaddrs of other nodes to dial at startup (`/ip4/<ip>/tcp/31002/p2p/<peerid>`). A **transport entry point** to join the mesh — not org-specific; any reachable peer works. mDNS/DHT also discover peers |
 | `GOSSIP_LISTEN` | gossip-node | No | `/ip4/0.0.0.0/tcp/31002` | gossip-node libp2p listen multiaddr |
 | `GOSSIP_HEARTBEAT_SEC` | gossip-node | No | `10` | Frontier publish interval (seconds) |
 | `GOSSIP_CORE` | gossip-node | No | `sead-core:50051` | Local sead-core gRPC target |
