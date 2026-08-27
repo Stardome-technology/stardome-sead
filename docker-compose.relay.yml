@@ -32,11 +32,10 @@ services:
       - GOSSIP_DHT=${GOSSIP_DHT:-true}
       - GOSSIP_PNET=${GOSSIP_PNET:-false}
       - GOSSIP_IDENTITY_KEY_FILE=${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}
-    command: ["/bin/sh", "-c",
-              "ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}\"; \
-               [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; \
-               [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; \
-               exec gossip-node $$ARGS"]
+    # Entrypoint override: see docker-compose.remote.yml gossip-node. The image's
+    # ENTRYPOINT is "gossip-node", so the `command` wrapper must run via sh -c.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
     restart: unless-stopped
 
 volumes:
