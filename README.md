@@ -17,8 +17,7 @@ produce tokens for IPFS pinning.
 - **storage-gateway** — evidence artifact distribution (IPFS-backed) (gRPC-only)
 - **source-data-service** — controlled disclosure of source data (gRPC-only)
 - **gossip-node** — C2 sync observer (Go): native libp2p Gossipsub frontier
-  dissemination + DHT/mDNS peer discovery + gRPC fetch/validate. Replaces the
-  legacy `sead-sync` + `p2p` (p2pd) HTTP/SSE facade.
+  dissemination + DHT/mDNS peer discovery + gRPC fetch/validate.
 
 > **Go Gateway migration (phase 4.4):** the C++ services are **gRPC-only** and
 > publish no public HTTP ports. They are reachable only on the internal
@@ -26,12 +25,11 @@ produce tokens for IPFS pinning.
 > are collapsed into the gateway (no longer standalone services). Health is
 > probed via `grpc.health.v1.Health`.
 
-> **Stage C (gossip transport):** the sync path is now a **native libp2p Gossipsub
-> mesh** via `gossip-node` (C2). The legacy `sead-sync` service and the `p2p`
-> (p2pd) HTTP/SSE facade are **superseded** — do not deploy them. `gossip-node`
-> runs its own libp2p peer (port 31002), publishes/subscribes frontiers on
-> `sead-sync/{org}` topics, and fetches/validates events over gRPC (local
-> sead-core + gateway). No HTTP/SSE in the sync path.
+> **Sync transport (gossip):** the sync path is a **native libp2p Gossipsub
+> mesh** via `gossip-node`. `gossip-node` runs its own libp2p peer (port 31002),
+> publishes/subscribes frontiers on `sead-sync/{org}` topics, and
+> fetches/validates events over gRPC (local sead-core + gateway). No HTTP/SSE
+> in the sync path.
 
 > **⚠️ Public port convention:** The published host port `30080` (gateway) is
 > **standardized across all public deployments** and must not be changed in this
@@ -46,7 +44,7 @@ must be reachable from outside (open in the firewall / cloud security group):
 
 - **`30080/tcp`** — gateway HTTPS API (all public endpoints: event store, org/edge
   key resolution, cross-org event fetch, ingest, receipts, verification)
-- **`31002/tcp`** — gossip-node libp2p peer (Stage C C2). The sync mesh dials
+- **`31002/tcp`** — gossip-node libp2p peer. The sync mesh dials
   peer nodes on this port (`/ip4/<ip>/tcp/31002`). Must be reachable between
   nodes for cross-node frontier dissemination + event fetch.
 
@@ -115,25 +113,25 @@ GOSSIP_BOOTSTRAP=/ip4/<peer-ip>/tcp/31002/p2p/<peerid>
 EOF
 ```
 
-> **Key env for the gossip sync (Stage C)** — `GOSSIP_ORG_ID` configures the
+> **Key env for the gossip sync** — `GOSSIP_ORG_ID` configures the
 > `gossip-node` C2 observer (its own org, always observed). `GOSSIP_OBSERVE_ORGS`
 > enables cross-node sync: the node subscribes to each listed org's
 > `sead-sync/{org}` topic and publishes frontiers for it. Observation is
 > **unilateral** — no publisher consent needed, so each node simply lists the
 > orgs it wants to verify for. `GOSSIP_BOOTSTRAP` lists the other nodes'
 > libp2p multiaddrs (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also
-> auto-discover peers on the same subnet. The legacy `SYNC_ORG_ID` /
-> `SYNC_P2P_URL` (p2pd HTTP facade) are **superseded** — do not set them.
+> auto-discover peers on the same subnet.
 
 > **Cross-node sync (DAG-native auth replication)** — when a node observes
 > another org, foreign `edge_commit` events are validated only **after** their
 > authorization graph (`edge_authorization` → `org_genesis`) is replicated to
-> the local `sead-core`. `sead-sync` recursively fetches these dependencies
-> (via the events' `dependency_refs` field, with indexed fallback for legacy
-> events), submits them in topological order, and holds events that await
-> dependencies until they resolve. There is **no trusted-sync bypass**: every
-> foreign event still passes sead-core's normal signature-verification path.
-> Genuinely invalid events are rejected and dropped, never retried.
+> the local `sead-core`. `gossip-node` recursively fetches these dependencies
+> (via the events' `dependency_refs` field, with indexed fallback for events
+> without explicit refs), submits them in topological order, and holds events
+> that await dependencies until they resolve. There is **no trusted-sync
+> bypass**: every foreign event still passes sead-core's normal
+> signature-verification path. Genuinely invalid events are rejected and
+> dropped, never retried.
 
 ### Start
 
@@ -161,6 +159,15 @@ curl -k https://localhost:30080/health
 > `export CURL_TLS=""` / `export CURL_TLS="--cacert /path/to/ca.crt"`
 > (public/private CA). The health check above keeps `-k` inline for brevity.
 
+> **⚠️ Gateway TLS — you must provide a certificate.** The gateway terminates
+> TLS using the cert/key you point `GATEWAY_TLS_CERT`/`GATEWAY_TLS_KEY` at
+> (default `/etc/gateway/certs/server.crt` / `.key`, mounted from `./secrets`).
+> If you start the stack without placing `server.crt` + `server.key` in
+> `./secrets/`, the gateway will fail to serve HTTPS. See the
+> [gateway README — TLS section](https://github.com/Stardome-technology/stardome-sead-gateway#tls-public-cert-production-vs-self-signed-isolatedown-party)
+> for how to choose between a public cert (production/cross-org) and a
+> self-signed cert (isolated/own-party), and how to generate them.
+
 ### Configuration reference
 
 | Variable | Service | Required | Default | Description |
@@ -183,9 +190,6 @@ curl -k https://localhost:30080/health
 | `EDGE_AUTHORIZATION_EVENT_ID` | edge-service | No | *(auto)* | Event_id (64 hex) of the `edge_authorization` that activated this edge, written into each `edge_commit`'s `dependency_refs` so commits resolve to their authorization graph on-chain. **Optional** — if unset, edge-service auto-resolves it from sead-core at startup; set it to override |
 | `IPFS_API_BASE_URL` | storage-gateway | No | `https://ipfs.stardome.cloud` | IPFS API endpoint |
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
-| `SYNC_ORG_ID` | sead-sync | **†** | — | **Superseded** by `GOSSIP_ORG_ID` (Stage C). Legacy p2p sync identity |
-| `SYNC_P2P_URL` | sead-sync | **†** | — | **Superseded** by `GOSSIP_BOOTSTRAP` (Stage C). Legacy p2pd HTTP facade URL |
-| `SYNC_OBSERVE_ORGS` | sead-sync | No | — | **Superseded** by `GOSSIP_OBSERVE_ORGS` (Stage C). Legacy observed orgs |
 | `GOSSIP_ORG_ID` | gossip-node | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; gossip-node's own org (always observed) |
 | `GOSSIP_OBSERVE_ORGS` | gossip-node | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
 | `GOSSIP_BOOTSTRAP` | gossip-node | No | — | Comma-separated libp2p multiaddrs of other nodes (`/ip4/<ip>/tcp/31002/p2p/<peerid>`) |
@@ -196,7 +200,7 @@ curl -k https://localhost:30080/health
 | `GOSSIP_MDNS` | gossip-node | No | `true` | Enable mDNS LAN peer discovery |
 | `GOSSIP_DHT` | gossip-node | No | `true` | Enable Kademlia DHT peer discovery |
 | `GOSSIP_PNET` | gossip-node | No | `false` | Enable private-network enforcement |
-| `SEAD_AUTH_SECRET` | gateway | **†** | — | Shared secret the gateway requires as `Authorization: Bearer <value>` on its public HTTPS endpoints. It guards the gateway's **public** API (the gRPC calls between the internal C++ services and `sead-sync` do **not** use it). **Empty (`""`) disables auth** — the gateway then accepts any request with no token, which is only safe for a localhost/isolated node; any **non-empty** value becomes a hard, single accepted Bearer (not "any string"). Set it (e.g. `openssl rand -hex 32`) whenever `:30080` could be reached beyond your own host |
+| `SEAD_AUTH_SECRET` | gateway | **†** | — | Shared secret the gateway requires as `Authorization: Bearer <value>` on its public HTTPS endpoints. It guards the gateway's **public** API (the gRPC calls between the internal C++ services and `gossip-node` do **not** use it). **Empty (`""`) disables auth** — the gateway then accepts any request with no token, which is only safe for a localhost/isolated node; any **non-empty** value becomes a hard, single accepted Bearer (not "any string"). Set it (e.g. `openssl rand -hex 32`) whenever `:30080` could be reached beyond your own host |
 | `GATEWAY_TLS_ENABLED` | gateway | No | `true` | Enable TLS termination (set false to disable) |
 | `GATEWAY_TLS_CERT` / `GATEWAY_TLS_KEY` | gateway | No | `/etc/gateway/certs/server.crt` / `.key` | TLS cert/key paths (mounted from `./secrets`). **Production/cross-org:** use a public cert (Let's Encrypt). **Isolated/own-party deployment:** self-signed is fine (see the gateway README for the distinction) |
 | `GATEWAY_AUTH_CBOR_ENABLED` | gateway | No | `true` | CBOR auth-token verification (collapsed from auth-service) |

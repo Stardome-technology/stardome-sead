@@ -1,8 +1,8 @@
-# Remote VPS Deployment — SEAD Stack + Explorer + P2P
+# Remote VPS Deployment — SEAD Stack + Explorer
 
 This guide covers the **remote VPS** deployment topology, where the full SEAD
 stack (gateway, edge-service, storage-gateway, source-data-service, sead-core,
-sead-sync), the **Explorer** (UI + API), and the **P2P** sidecar all run on a
+gossip-node), the **Explorer** (UI + API), and the **gateway** all run on a
 single remote VPS.
 
 > **Go Gateway migration (phase 4.4):** the C++ services are **gRPC-only** and
@@ -24,14 +24,13 @@ graph TB
             ES[edge-service :50055 gRPC]
             SG[storage-gateway :50052 gRPC]
             SD[source-data-service :50053 gRPC]
-            SY[sead-sync :50054 gRPC]
+            GN[gossip-node :31002 libp2p]
         end
         subgraph "Explorer"
             UI[Explorer UI nginx :80]
             API[Explorer API :8086]
             DB[(PostgreSQL)]
         end
-        P2P[p2pd :30089 / swarm 31001]
         NGINX[nginx :443]
     end
 
@@ -46,9 +45,8 @@ graph TB
     BROWSER -->|"https://edge.example.com/"| NGINX
     NGINX -->|proxy /api| API
     API -->|internal| GW
-    OTH -->|"31001 tcp/udp + 30089"| P2P
-    P2P -->|"POST /events/{topic}"| SC
-    SY -->|"SYNC_P2P_URL"| P2P
+    OTH -->|"31002 tcp"| GN
+    GN -->|"gRPC SyncFetch"| GW
 ```
 
 ---
@@ -61,8 +59,7 @@ graph TB
 | Edge-service exposure | Private Docker network only | Public via nginx (TLS) |
 | Explorer UI | `http://localhost:3000` | `https://edge.example.com/` |
 | Explorer API | `http://localhost:8086` | `https://edge.example.com/api` (optional) |
-| P2P swarm | LAN/mesh IP | VPS public IP |
-| sead-sync → p2p | `http://<lan-ip>:30089` | `http://<vps-ip>:30089` |
+| gossip-node libp2p | LAN/mesh IP | VPS public IP |
 
 ---
 
@@ -77,9 +74,7 @@ graph TB
 | **80** | TCP | nginx (HTTP → HTTPS redirect) | everyone |
 | **443** | TCP | nginx (TLS: Explorer UI + API + gateway proxy) | everyone |
 | **30080** | TCP | gateway HTTPS API (cross-org event fetch, ingest, verify) | other SEAD nodes, brokers |
-| **30089** | TCP | p2p HTTP API (`/health`, `/peers`, `/events/{topic}`) | sead-sync, other nodes |
-| **31001** | TCP | libp2p swarm (TCP) | other SEAD nodes |
-| **31001** | UDP | libp2p swarm (QUIC) | other SEAD nodes |
+| **31002** | TCP | gossip-node libp2p peer (frontier dissemination + event fetch) | other SEAD nodes |
 
 **Not exposed** (private to the Docker network): `50051` (sead-core),
 `50052` (storage-gateway), `50053` (source-data-service), `50054` (gateway
@@ -92,16 +87,14 @@ nginx `/api`), `3000` (Explorer UI — reachable only via nginx `/`).
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw allow 30080/tcp
-sudo ufw allow 30089/tcp
-sudo ufw allow 31001/tcp
-sudo ufw allow 31001/udp
+sudo ufw allow 31002/tcp
 sudo ufw enable
 ```
 
-> **Hardening (recommended):** `31001` (swarm) and `30089` (p2p API) only need
-> to be reachable by *other SEAD nodes*. If you know their IPs, restrict these
-> to those peers instead of opening them to the whole internet:
-> `sudo ufw allow from <peer-ip> to any port 31001 proto tcp`, etc.
+> **Hardening (recommended):** `31002` (gossip-node libp2p) only needs
+> to be reachable by *other SEAD nodes*. If you know their IPs, restrict it
+> to those peers instead of opening it to the whole internet:
+> `sudo ufw allow from <peer-ip> to any port 31002 proto tcp`, etc.
 
 ---
 
@@ -118,14 +111,16 @@ EDGE_ID=<edge_id_hex>
 EDGE_SIGNING_KEY=<edge_secret_key_hex>
 EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
-SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
-SYNC_P2P_URL=http://<VPS-PUBLIC-IP>:30089   # VPS public IP, NOT http://p2p:30089
+GOSSIP_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
+GOSSIP_OBSERVE_ORGS=<other_org_id_hex>,<another_org_id_hex>
+GOSSIP_BOOTSTRAP=/ip4/<peer-ip>/tcp/31002/p2p/<peerid>
 SEAD_AUTH_SECRET=<shared-secret>         # required in production
 ```
 
-> **`SYNC_P2P_URL`** must use the VPS's **public IP** (or a private IP reachable
-> from the sync container). The p2p sidecar runs with `network_mode: host`, so
-> it is **not** reachable at the `p2p` hostname from the bridge network.
+> **`GOSSIP_BOOTSTRAP`** lists the other nodes' libp2p multiaddrs
+> (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also auto-discover peers on
+> the same subnet. `GOSSIP_OBSERVE_ORGS` enables cross-node sync (the node
+> subscribes to each listed org's `sead-sync/{org}` topic).
 
 ### 3.2 Start
 
@@ -135,7 +130,6 @@ docker compose -f docker-compose.remote.yml up -d
 
 # Verify the gateway is healthy
 curl -k https://localhost:30080/health
-curl http://localhost:30089/health
 ```
 
 ---
@@ -173,27 +167,22 @@ OBSERVER_NODE_ID=<observer_node_id_hex>
 
 ---
 
-## 5. Deploy the P2P sidecar
+## 5. gossip-node (sync observer)
 
-Deploy the p2p sidecar on the same VPS (see
-[stardome-sead-p2p](https://github.com/Stardome-technology/stardome-sead-p2p)).
-
-```bash
-docker compose -f docker-compose.remote.yml pull
-docker compose -f docker-compose.remote.yml up -d
-
-curl http://localhost:30089/health
-```
+`gossip-node` is included in the SEAD stack compose (`docker-compose.remote.yml`)
+and starts automatically. It runs its own libp2p peer on `31002` and
+publishes/subscribes frontiers on `sead-sync/{org}` topics.
 
 For other SEAD nodes to reach this VPS node across subnets, configure them with
-this VPS as a DHT bootstrap peer:
+this VPS as a bootstrap peer:
 
 ```bash
 # On the OTHER nodes' .env — replace <VPS-IP> and <PEER_ID> with real values
-P2P_BOOTSTRAP_PEERS=/ip4/<VPS-IP>/tcp/31001/p2p/<PEER_ID>
+GOSSIP_BOOTSTRAP=/ip4/<VPS-IP>/tcp/31002/p2p/<PEER_ID>
 ```
 
-Get `<PEER_ID>` from this VPS node's `/health` endpoint.
+Get `<PEER_ID>` from this VPS node's gossip-node logs (it prints its peer ID
+at startup).
 
 ---
 
@@ -365,7 +354,6 @@ edge. Use a pre-generated token (`SEAD_AUTH_SECRET` or per-request
 ```bash
 # Stack
 curl -k https://localhost:30080/health
-curl http://localhost:30089/health
 
 # Explorer (via nginx)
 curl -k https://edge.example.com/health
@@ -377,6 +365,6 @@ curl -X POST https://edge.example.com/ingest \
   -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d '{"module_id":"<hex>","org_id":"<hex>","edge_id":"<hex>","artifact":"<hex>"}'
 
-# P2P swarm listening
-ss -tulpn | grep 31001
+# gossip-node libp2p listening
+ss -tulpn | grep 31002
 ```
