@@ -151,7 +151,7 @@ services:
     # at the first non-flag arg ("sh"), and the binary boots with defaults
     # (relay-only + port 9001), never receiving --own-org/--orgs/--listen.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ARGS=\"--own-org ${GOSSIP_ORG_ID:-} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}\"; for o in $(echo ${GOSSIP_OBSERVE_ORGS} | tr ',' ' '); do [ -n \"$$o\" ] && ARGS=\"$$ARGS --orgs $$o\"; done; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
+    command: ["ARGS=\"--own-org ${GOSSIP_ORG_ID:-} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}\"; [ -n \"${GOSSIP_OBSERVE_ORGS}\" ] && ARGS=\"$$ARGS --orgs ${GOSSIP_OBSERVE_ORGS}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
     depends_on:
       gateway:
         condition: service_healthy
