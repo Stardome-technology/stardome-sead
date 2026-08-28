@@ -121,6 +121,25 @@ SEAD_AUTH_SECRET=<shared-secret>         # required in production
 > (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also auto-discover peers on
 > the same subnet. `GOSSIP_OBSERVE_ORGS` enables cross-node sync (the node
 > subscribes to each listed org's `sead-sync/{org}` topic).
+>
+> **Networking vs. authority — four layers.** Reachability and bootstrap are *transport
+> only*; catalog and membership are SEAD authority. They must not be conflated:
+>
+> - **Reachability** — "can I reach any SEAD participant?" (direct IP, static peer, DNS,
+>   relay/rendezvous, mDNS). Networking only.
+> - **Bootstrap** — "can I enter the mesh?" (`GOSSIP_BOOTSTRAP`, DHT, or a relay-only node).  
+>   Networking only; which one you use is up to you.
+> - **Catalog** — "which nodes represent org X?" The org-signed
+>   `ReplicationEndpointCatalog` (event_type 60). SEAD authority begins here.
+> - **Membership** — "can those nodes be trusted as org X?" Org genesis → edge authorization
+>    → the catalog's signature chain. SEAD authority.
+>
+> **The catalog is not a first-contact mechanism** — it cannot bootstrap from zero knowledge.
+> A node must first reach *a* SEAD peer via a transport mechanism (bootstrap, DNS, mDNS, DHT,
+> rendezvous, or relay), then retrieve the catalogs. **Bootstrap establishes connectivity;
+> catalogs establish authority.** Choose the transport that fits your deployment (static
+> seed, DNS/relay for roaming/NAT, mDNS on a trusted LAN, or direct IP); none of these confer
+> org trust. See the main README for the full model.
 
 ### 3.2 Start
 
