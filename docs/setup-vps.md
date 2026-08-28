@@ -190,18 +190,76 @@ OBSERVER_NODE_ID=<observer_node_id_hex>
 
 `gossip-node` is included in the SEAD stack compose (`docker-compose.remote.yml`)
 and starts automatically. It runs its own libp2p peer on `31002` and
-publishes/subscribes frontiers on `sead-sync/{org}` topics.
+publishes/subscribes frontiers on `sead-sync/{org}` topics. `31002` is published on
+the host so other nodes can dial this peer.
 
-For other SEAD nodes to reach this VPS node across subnets, configure them with
-this VPS as a bootstrap peer:
+### 5.1 The `GOSSIP_BOOTSTRAP` multiaddr format
+
+`GOSSIP_BOOTSTRAP` is a comma-separated list of **libp2p multiaddrs** telling a node which
+peer(s) to dial to enter the mesh. Each entry has the form
+`/ip4/<ip>/tcp/31002/p2p/<peerid>`, but the network component is **not limited to an IP** —
+libp2p multiaddrs also support DNS:
 
 ```bash
-# On the OTHER nodes' .env — replace <VPS-IP> and <PEER_ID> with real values
-GOSSIP_BOOTSTRAP=/ip4/<VPS-IP>/tcp/31002/p2p/<PEER_ID>
+# IP (LAN / mesh / VPS):
+/ip4/192.168.0.103/tcp/31002/p2p/<peerid>
+/ip4/<VPS-IP>/tcp/31002/p2p/<peerid>
+
+# DNS (works when an address record or path resolves the host):
+/dns4/sead.example.org/tcp/31002/p2p/<peerid>
+/dnsaddr/sead.example.org/tcp/31002/p2p/<peerid>
 ```
 
-Get `<PEER_ID>` from this VPS node's gossip-node logs (it prints its peer ID
-at startup).
+The peer dialed this way becomes a **transport-level entry point** (layer 1–2) — it has no
+org meaning by itself. mDNS and DHT are also available to auto-discover peers on the same
+subnet; `GOSSIP_BOOTSTRAP` is the deterministic static-seed path. Once connected, the node
+retrieves the observed orgs' catalogs over the mesh.
+
+### 5.2 Getting `<PEERID>`
+
+Each `gossip-node` prints its stable (persistent-identity) peer ID at startup:
+
+```bash
+docker logs stardome-sead-gossip-node-1 | grep "peer ID"
+# → [gossip-node] libp2p node started, peer ID: 12D3KooW...
+```
+
+The peer ID is stable across restarts (backed by `/data/gossip-identity.key`), so you capture
+it **once** and reuse it in other nodes' `GOSSIP_BOOTSTRAP`. You will need the IP or hostname
+of the peer *and* its peer ID to build the entry.
+
+### 5.3 Who gives whom a bootstrap entry
+
+A `GOSSIP_BOOTSTRAP` entry is something you **issue to a peer**, not a claim about org
+membership. Two common cases:
+
+- **A third-party integrator bootstrapping onto your org's nodes.** You give the integrator a
+  multiaddr pointing at *one of your reachable SEAD nodes* (`/ip4/<your-ip>/tcp/31002/p2p/
+  <your-peerid>`). That integrator dials it to contact the mesh and then retrieves *your* org's
+  catalogs to learn which of your nodes legitimately represent the org. This is a **sharing**
+  of a transport entry point — it is not a trust claim about the integrator or your node.
+- **Your own org's "supplementary" (additional) nodes bootstrapping onto each other.** If you
+  run multiple nodes for the same org, list one another's multiaddrs in `GOSSIP_BOOTSTRAP` so
+  they form a direct mesh, and each retrieves the org's catalog to fill in the full node set.
+
+In both cases the entry is **transport only** (layer 1–2). Whether a node may act for an org
+is decided by the org's **catalog** and DAG signatures — `ReplicationEndpointCatalog`
+(event_type 60) lists the nodes + reachable addresses that legitimately represent the org for
+replication — not by the bootstrap list. The same multiaddr can be dialed by a third party
+and by your own supplementary nodes; what changes is only *which orgs* each dial.
+
+For example, if this VPS node is one of org A's replication endpoints and has peer ID `12D3KooW...`:
+
+```bash
+# On a THIRD-PARTY integrator node observing org A:
+GOSSIP_BOOTSTRAP=/ip4/<VPS-IP>/tcp/31002/p2p/12D3KooW...
+GOSSIP_OBSERVE_ORGS=<org_A_hex>
+
+# on your OWN supplementary node for org A:
+GOSSIP_BOOTSTRAP=/ip4/<VPS-IP>/tcp/31002/p2p/12D3KooW...
+GOSSIP_ORG_ID=<org_A_hex>
+GOSSIP_OBSERVE_ORGS=<org_A_hex>,<org_B_hex>
+```
 
 ---
 
