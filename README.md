@@ -14,7 +14,8 @@ produce tokens for IPFS pinning.
   `auth-service` and `verifier-service` are collapsed into the gateway.
 - **sead-core** — event store, DAG maintenance, org/edge key resolution (gRPC-only)
 - **edge-service** — ingest, receipt, commit, and retrieval APIs (gRPC-only)
-- **storage-gateway** — evidence artifact distribution (IPFS-backed) (gRPC-only)
+- **storage-gateway** — evidence artifact distribution (gRPC-only); IPFS pinning is now owned by the `pin-service`
+- **pin-service** — Go gRPC service (`sead_rpc.Storage`) that owns the IPFS boundary. Replaces the storage-gateway's IPFS pin leg. Provides `AddToIPFS` and `RetrieveFromIPFS` RPCs. Edge-service pins via this service on `pin-service:50056`
 - **source-data-service** — controlled disclosure of source data (gRPC-only)
 - **gossip-node** — C2 sync observer (Go): native libp2p Gossipsub frontier
   dissemination + DHT/mDNS peer discovery + gRPC fetch/validate.
@@ -214,6 +215,7 @@ curl -k https://localhost:30080/health
 | `EDGE_ORG_PUBLIC_KEY` | edge-service | No | — | Org XMSS public key (hex) |
 | `EDGE_TOKEN_TTL` | edge-service | No | `300` | Auth token TTL in seconds |
 | `EDGE_STORAGE_GATEWAY_URL` | edge-service | No | `storage-gateway:50052` | Storage gateway gRPC target |
+| `EDGE_PIN_SERVICE_URL` | edge-service | No | `pin-service:50056` | Pin service gRPC target — replaces the storage-gateway IPFS pin leg; edge pins via the Go pin service (`sead_rpc.Storage`) |
 | `EDGE_WATCHDOG_INTERVAL_SEC` | edge-service | No | `1` | DAG commit (watchdog) cadence in seconds — near-realtime commit publish |
 | `EDGE_PIN_INTERVAL_SEC` | edge-service | No | `30` | IPFS pin loop cadence (independent, slow) |
 | `EDGE_PIN_MAX_RETRIES` | edge-service | No | `-1` | Max pin retries (`-1` = unlimited) |
@@ -569,10 +571,10 @@ curl $CURL_TLS https://localhost:30080/cid/<payload_hash_hex> \
 
 > **Token minting:** the edge-service auto-generates per-pin auth tokens
 > internally (signed by the org XMSS key) when it commits an artifact and
-> pins it to IPFS via the storage gateway over gRPC. The standalone
-> `POST /auth/token` HTTP endpoint on edge-service is **removed** in the
-> Go Gateway migration — edge-service is gRPC-only. For the IPFS auth
-> stack deployment (minimal sead-core + gateway), see
+> pins it to IPFS via the Go pin service (`sead_rpc.Storage`) over gRPC.
+> The standalone `POST /auth/token` HTTP endpoint on edge-service is
+> **removed** in the Go Gateway migration — edge-service is gRPC-only.
+> For the IPFS auth stack deployment (minimal sead-core + gateway), see
 > [stardome-ipfs](https://github.com/Stardome-technology/stardome-ipfs).
 
 ### Token structure
