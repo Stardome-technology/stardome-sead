@@ -1,0 +1,42 @@
+# Relay-only bootstrap peer — runs ONLY gossip-node as a pure libp2p transport
+# relay. No sead-core, no edge-service, no gateway: this node is NOT enrolled
+# to any org and requires NO XMSS signing key and NO dummy org.
+#
+# It is a connectivity anchor only: host + persistent identity (stable PeerId)
+# + DHT + mDNS + bootstrap dialing. It subscribes to zero `sead-sync/{org}`
+# topics, so it relays no org content and cannot inject into any DAG. Other
+# nodes join the mesh by dialing its published libp2p multiaddr
+# (`/ip4/<host-ip>/tcp/31002/p2p/<peerid>`).
+#
+# Usage: docker compose -f docker-compose.relay.yml up -d
+# Get the PeerId: docker compose -f docker-compose.relay.yml logs gossip-node | grep "peer ID"
+# Persistent identity keeps the PeerId stable across restarts.
+
+services:
+  gossip-node:
+    image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
+    container_name: stardome-relay
+    # Publish the libp2p TCP port so other nodes reach this relay at the
+    # node's LAN/mesh IP.
+    ports:
+      - "31002:31002/tcp"
+    volumes:
+      - gossip_data:/data
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SERVICE_NAME=gossip-relay
+      # Deliberately NO GOSSIP_ORG_ID and NO GOSSIP_OBSERVE_ORGS: relay-only.
+      - GOSSIP_LISTEN=${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002}
+      - GOSSIP_BOOTSTRAP=${GOSSIP_BOOTSTRAP:-}
+      - GOSSIP_MDNS=${GOSSIP_MDNS:-true}
+      - GOSSIP_DHT=${GOSSIP_DHT:-true}
+      - GOSSIP_PNET=${GOSSIP_PNET:-false}
+      - GOSSIP_IDENTITY_KEY_FILE=${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}
+    # Entrypoint override: see docker-compose.remote.yml gossip-node. The image's
+    # ENTRYPOINT is "gossip-node", so the `command` wrapper must run via sh -c.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
+    restart: unless-stopped
+
+volumes:
+  gossip_data:

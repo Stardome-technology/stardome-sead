@@ -1,19 +1,25 @@
 # Remote compose file — pulls pre-built images from ghcr.io instead of building.
 # Usage: docker compose -f docker-compose.remote.yml up -d
+#
+# Go Gateway migration (phase 4.4): the C++ services (sead-core, edge-service,
+# storage-gateway, source-data-service, sead-sync) are gRPC-only and publish no
+# public HTTP ports. The Go gateway is the single public HTTPS entry point: it
+# terminates TLS, enforces auth, and routes to the internal services over the
+# shared `sead-network` bridge. `auth-service` and `verifier-service` are
+# collapsed into the gateway (no longer standalone services).
 
 services:
   sead-core:
     image: ghcr.io/stardome-technology/stardome-sead/sead-core:latest
-    ports:
-      - "30080:8080"
+    # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=sead-core
-    command: ["sead-core", "--port", "8080", "--db", "/data/sead.db"]
+    command: ["sead-core", "--port", "50051", "--db", "/data/sead.db"]
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -22,40 +28,50 @@ services:
 
   edge-service:
     image: ghcr.io/stardome-technology/stardome-sead/edge-service:latest
-    ports:
-      - "8081:8081"
+    # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=edge-service
-      - EDGE_ORG_ID=${EDGE_ORG_ID:?error}
-      - EDGE_ID=${EDGE_ID:?error}
+      - EDGE_ORG_ID=${EDGE_ORG_ID:-}
+      - EDGE_ID=${EDGE_ID:-}
       - EDGE_SIGNING_KEY=${EDGE_SIGNING_KEY:-}
       - EDGE_ORG_SIGNING_KEY=${EDGE_ORG_SIGNING_KEY:-}
       - EDGE_ORG_PUBLIC_KEY=${EDGE_ORG_PUBLIC_KEY:-}
       - EDGE_TOKEN_TTL=${EDGE_TOKEN_TTL:-300}
-      - EDGE_STORAGE_GATEWAY_URL=${EDGE_STORAGE_GATEWAY_URL:-http://storage-gateway:8082}
-      - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-30}
+      - EDGE_STORAGE_GATEWAY_URL=${EDGE_STORAGE_GATEWAY_URL:-storage-gateway:50052}
+      - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-1}
+      - EDGE_PIN_INTERVAL_SEC=${EDGE_PIN_INTERVAL_SEC:-30}
+      - EDGE_PIN_MAX_RETRIES=${EDGE_PIN_MAX_RETRIES:--1}
+      - EDGE_PIN_BACKOFF_BASE_SEC=${EDGE_PIN_BACKOFF_BASE_SEC:-30}
+      - EDGE_PIN_BACKOFF_CAP_SEC=${EDGE_PIN_BACKOFF_CAP_SEC:-86400}
       - EDGE_COMMIT_STRATEGY=${EDGE_COMMIT_STRATEGY:-single}
       - EDGE_BATCH_FLUSH_INTERVAL_SEC=${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}
-    command: ["edge-service", "--port", "8081", "--db", "/data/edge.db",
-              "--org-id", "${EDGE_ORG_ID:?error}",
-              "--edge-id", "${EDGE_ID:?error}",
+      # Optional — auto-resolved from sead-core at startup if unset; set to override
+      - EDGE_AUTHORIZATION_EVENT_ID=${EDGE_AUTHORIZATION_EVENT_ID:-}
+    command: ["edge-service", "--port", "50055", "--db", "/data/edge.db",
+              "--org-id", "${EDGE_ORG_ID:-}",
+              "--edge-id", "${EDGE_ID:-}",
               "--signing-key", "${EDGE_SIGNING_KEY}",
               "--org-signing-key", "${EDGE_ORG_SIGNING_KEY}",
               "--org-public-key", "${EDGE_ORG_PUBLIC_KEY}",
               "--token-ttl", "${EDGE_TOKEN_TTL:-300}",
-              "--storage-gateway-url", "${EDGE_STORAGE_GATEWAY_URL:-http://storage-gateway:8082}",
-              "--sead-core-url", "http://sead-core:8080",
-              "--watchdog-interval", "${EDGE_WATCHDOG_INTERVAL_SEC:-30}",
+              "--storage-gateway-url", "${EDGE_STORAGE_GATEWAY_URL:-storage-gateway:50052}",
+              "--sead-core-url", "sead-core:50051",
+              "--watchdog-interval", "${EDGE_WATCHDOG_INTERVAL_SEC:-1}",
               "--commit-strategy", "${EDGE_COMMIT_STRATEGY:-single}",
-              "--batch-flush-interval", "${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}"]
+              "--batch-flush-interval", "${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}",
+              "--pin-interval", "${EDGE_PIN_INTERVAL_SEC:-30}",
+              "--pin-max-retries", "${EDGE_PIN_MAX_RETRIES:--1}",
+              "--pin-backoff-base", "${EDGE_PIN_BACKOFF_BASE_SEC:-30}",
+              "--pin-backoff-cap", "${EDGE_PIN_BACKOFF_CAP_SEC:-86400}",
+              "--edge-authorization-event-id", "${EDGE_AUTHORIZATION_EVENT_ID}"]
     depends_on:
       sead-core:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50055"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -64,73 +80,20 @@ services:
 
   storage-gateway:
     image: ghcr.io/stardome-technology/stardome-sead/storage-gateway:latest
-    ports:
-      - "8082:8082"
+    # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=storage-gateway
       - IPFS_API_BASE_URL=${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud}
-    command: ["storage-gateway", "--port", "8082", "--db", "/data/storage.db",
+    command: ["storage-gateway", "--port", "50052", "--db", "/data/storage.db",
               "--ipfs-url", "${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud}"]
     depends_on:
       sead-core:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    networks:
-      - sead-network
-
-  auth-service:
-    image: ghcr.io/stardome-technology/stardome-sead/auth-service:latest
-    ports:
-      - "8083:8083"
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - SERVICE_NAME=auth-service
-      - AUTH_SEAD_CORE_BASE_URL=http://sead-core:8080
-      - AUTH_SKEW_TOLERANCE_SEC=${AUTH_SKEW_TOLERANCE_SEC:-30}
-      - AUTH_KEY_CACHE_TTL_SEC=${AUTH_KEY_CACHE_TTL_SEC:-60}
-    command: ["auth-service", "--port", "8083",
-              "--sead-core-url", "http://sead-core:8080",
-              "--skew-tolerance", "${AUTH_SKEW_TOLERANCE_SEC:-30}",
-              "--cache-ttl", "${AUTH_KEY_CACHE_TTL_SEC:-60}"]
-    depends_on:
-      sead-core:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    networks:
-      - sead-network
-
-  verifier-service:
-    image: ghcr.io/stardome-technology/stardome-sead/verifier-service:latest
-    ports:
-      - "8084:8084"
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - SERVICE_NAME=verifier-service
-      - VERIFIER_SEAD_CORE_BASE_URL=http://sead-core:8080
-      - VERIFIER_STORAGE_BASE_URL=http://storage-gateway:8082
-      - VERIFIER_SOURCE_DATA_BASE_URL=${VERIFIER_SOURCE_DATA_BASE_URL:-http://source-data-service:8085}
-    command: ["verifier-service", "--port", "8084",
-              "--sead-core-url", "http://sead-core:8080",
-              "--storage-url", "http://storage-gateway:8082",
-              "--source-data-url", "${VERIFIER_SOURCE_DATA_BASE_URL:-http://source-data-service:8085}"]
-    depends_on:
-      sead-core:
-        condition: service_healthy
-      storage-gateway:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8084/health"]
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50052"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -139,51 +102,125 @@ services:
 
   source-data-service:
     image: ghcr.io/stardome-technology/stardome-sead/source-data-service:latest
-    ports:
-      - "8085:8085"
+    # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=source-data-service
       - SOURCE_DATA_TRUSTED_VERIFIERS=${SOURCE_DATA_TRUSTED_VERIFIERS:-}
-    command: ["source-data-service", "--port", "8085", "--db", "/data/sourcedata.db",
+    command: ["source-data-service", "--port", "50053", "--db", "/data/sourcedata.db",
               "--trusted-verifiers", "${SOURCE_DATA_TRUSTED_VERIFIERS:-}"]
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8085/health"]
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50053"]
       interval: 15s
       timeout: 5s
       retries: 3
     networks:
       - sead-network
 
-  sead-sync:
-    image: ghcr.io/stardome-technology/stardome-sead/sead-sync:latest
+  gossip-node:
+    image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
+    # Option A (C2): own libp2p peer per node.
+    # - On the sead-network bridge so it reaches sead-core/gateway by name.
+    # - Publish the libp2p TCP port so other POCs reach this peer at the node's
+    #   LAN/mesh IP (e.g. /ip4/192.168.60.1/tcp/31002 and mDNS).
+    # - Persistent identity key (gossip_data volume) keeps the PeerId stable
+    #   across restarts so published bootstrap/catalog multiaddrs stay valid.
     ports:
-      - "30090:8090"
+      - "31002:31002/tcp"
+    volumes:
+      - gossip_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - SERVICE_NAME=sead-sync
-      - SYNC_ORG_ID=${SYNC_ORG_ID:?error}
-      - SYNC_P2P_URL=${SYNC_P2P_URL:-http://p2p:30089}
-      - SYNC_INTERVAL=${SYNC_INTERVAL:-10}
-    command: ["sead-sync", "--port", "8090", "--sead-core-url", "http://sead-core:8080",
-              "--p2p-url", "${SYNC_P2P_URL:-http://p2p:30089}",
-              "--org-id", "${SYNC_ORG_ID:?error}",
-              "--sync-interval", "${SYNC_INTERVAL:-10}"]
+      - SERVICE_NAME=gossip-node
+      - GOSSIP_ORG_ID=${GOSSIP_ORG_ID:-}
+      - GOSSIP_OBSERVE_ORGS=${GOSSIP_OBSERVE_ORGS:-}
+      - GOSSIP_LISTEN=${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002}
+      - GOSSIP_BOOTSTRAP=${GOSSIP_BOOTSTRAP:-}
+      - GOSSIP_HEARTBEAT_SEC=${GOSSIP_HEARTBEAT_SEC:-10}
+      - GOSSIP_CORE=${GOSSIP_CORE:-sead-core:50051}
+      - GOSSIP_GATEWAY=${GOSSIP_GATEWAY:-gateway:50054}
+      - GOSSIP_MDNS=${GOSSIP_MDNS:-true}
+      - GOSSIP_DHT=${GOSSIP_DHT:-true}
+      - GOSSIP_PNET=${GOSSIP_PNET:-false}
+      - GOSSIP_IDENTITY_KEY_FILE=${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}
+    # Override the image ENTRYPOINT ("gossip-node") so the `command` wrapper below
+    # actually runs as a shell script. Without this, compose appends
+    # ["sh","-c",...] as positional args to `gossip-node`, Go's flag parser stops
+    # at the first non-flag arg ("sh"), and the binary boots with defaults
+    # (relay-only + port 9001), never receiving --own-org/--orgs/--listen.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ARGS=\"--own-org ${GOSSIP_ORG_ID:-} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}\"; [ -n \"${GOSSIP_OBSERVE_ORGS}\" ] && ARGS=\"$$ARGS --orgs ${GOSSIP_OBSERVE_ORGS}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - sead-network
+
+  gateway:
+    image: ghcr.io/stardome-technology/stardome-sead-gateway:latest
+    ports:
+      - "30080:30080"
+    volumes:
+      - ./secrets:/etc/gateway/certs:ro
+    environment:
+      - GATEWAY_LISTEN_ADDR=${GATEWAY_LISTEN_ADDR:-:30080}
+      - GATEWAY_TLS_ENABLED=${GATEWAY_TLS_ENABLED:-true}
+      - GATEWAY_TLS_CERT=${GATEWAY_TLS_CERT:-/etc/gateway/certs/server.crt}
+      - GATEWAY_TLS_KEY=${GATEWAY_TLS_KEY:-/etc/gateway/certs/server.key}
+      - GATEWAY_AUTH_ENABLED=${GATEWAY_AUTH_ENABLED:-true}
+      - SEAD_AUTH_SECRET=${SEAD_AUTH_SECRET:-}
+      - GATEWAY_EDGE_TOKENS=${GATEWAY_EDGE_TOKENS:-}
+      - GATEWAY_AUTH_CBOR_ENABLED=${GATEWAY_AUTH_CBOR_ENABLED:-true}
+      # Key resolution uses the SVC_SEAD_CORE_GRPC gRPC target
+      - GATEWAY_AUTH_CBOR_CACHE_TTL=${GATEWAY_AUTH_CBOR_CACHE_TTL:-60}
+      - GATEWAY_AUTH_CBOR_SKEW_TOLERANCE=${GATEWAY_AUTH_CBOR_SKEW_TOLERANCE:-30}
+      - GATEWAY_METRICS_ENABLED=${GATEWAY_METRICS_ENABLED:-true}
+      - GATEWAY_LOG_LEVEL=${GATEWAY_LOG_LEVEL:-info}
+      - GATEWAY_READ_TIMEOUT=${GATEWAY_READ_TIMEOUT:-30s}
+      - GATEWAY_WRITE_TIMEOUT=${GATEWAY_WRITE_TIMEOUT:-30s}
+      - GATEWAY_IDLE_TIMEOUT=${GATEWAY_IDLE_TIMEOUT:-90s}
+      - GATEWAY_PROXY_TIMEOUT=${GATEWAY_PROXY_TIMEOUT:-30s}
+      - GATEWAY_HEALTH_BACKENDS=${GATEWAY_HEALTH_BACKENDS:-sead-core,edge-service,storage,source-data}
+      # Internal C++ services (gRPC-only, Go Gateway migration phase 4.4)
+      - SVC_SEAD_CORE_GRPC=${SVC_SEAD_CORE_GRPC:-sead-core:50051}
+      - SVC_EDGE_SERVICE_GRPC=${SVC_EDGE_SERVICE_GRPC:-edge-service:50055}
+      - SVC_STORAGE_GRPC=${SVC_STORAGE_GRPC:-storage-gateway:50052}
+      - SVC_SOURCE_DATA_GRPC=${SVC_SOURCE_DATA_GRPC:-source-data-service:50053}
+      - GATEWAY_GRPC_PORT=${GATEWAY_GRPC_PORT:-50054}
+      # Cross-node sync fetch (Phase 8): peer gateways this gateway fetches
+      # missing events from over HTTPS. Comma-separated base URLs.
+      - GATEWAY_PEERS=${GATEWAY_PEERS:-}
+      - GATEWAY_PEER_TOKEN=${GATEWAY_PEER_TOKEN:-}
+      # Peer gateway TLS: set GATEWAY_PEER_TLS_INSECURE=true only for
+      # isolated/own-party deployments using self-signed certs; or set
+      # GATEWAY_PEER_CA_CERT to a PEM CA bundle for a private CA.
+      - GATEWAY_PEER_TLS_INSECURE=${GATEWAY_PEER_TLS_INSECURE:-false}
+      - GATEWAY_PEER_CA_CERT=${GATEWAY_PEER_CA_CERT:-}
     depends_on:
       sead-core:
         condition: service_healthy
+      edge-service:
+        condition: service_healthy
+      storage-gateway:
+        condition: service_healthy
+      source-data-service:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      test: ["CMD", "wget", "--no-check-certificate", "-qO-", "https://localhost:30080/health"]
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 10s
+    restart: unless-stopped
     networks:
       - sead-network
 
 volumes:
   sead_data:
+  gossip_data:
 
 networks:
   sead-network:

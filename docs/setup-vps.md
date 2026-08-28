@@ -1,33 +1,36 @@
-# Remote VPS Deployment — SEAD Stack + Explorer + P2P
+# Remote VPS Deployment — SEAD Stack + Explorer
 
 This guide covers the **remote VPS** deployment topology, where the full SEAD
-stack (edge-service, storage-gateway, auth-service, verifier-service,
-source-data-service, sead-core, sead-sync), the **Explorer** (UI + API), and
-the **P2P** sidecar all run on a single remote VPS.
+stack (gateway, edge-service, storage-gateway, source-data-service, sead-core,
+gossip-node), the **Explorer** (UI + API), and the **gateway** all run on a
+single remote VPS.
 
-This differs from the a single-host demonstration setup which assumes
-the **broker running on the same device** as the edge-service and talking to it over
-the Docker network (`http://host.docker.internal:8081`). Here the broker still mimics the integrator firmware
-and reaches the VPS edge-service over the network as in real world deployments.
+> **Go Gateway migration (phase 4.4):** the C++ services are **gRPC-only** and
+> publish no public HTTP ports. The **gateway** is the single public HTTPS
+> entry point. `auth-service` and `verifier-service` are collapsed into the
+> gateway (no longer standalone services).
+
+This differs from a single-host deployment which assumes
+the **broker running on the same device** as the stack and talking to the gateway
+over `host.docker.internal:30080`. Here the broker still mimics the integrator firmware
+and reaches the VPS gateway over the network as in real world deployments.
 
 ```mermaid
 graph TB
     subgraph "Remote VPS"
         subgraph "SEAD stack (sead-network)"
-            SC[sead-core :8080]
-            ES[edge-service :8081]
-            SG[storage-gateway :8082]
-            AU[auth-service :8083]
-            VR[verifier-service :8084]
-            SD[source-data-service :8085]
-            SY[sead-sync :8090]
+            GW[gateway :30080]
+            SC[sead-core :50051 gRPC]
+            ES[edge-service :50055 gRPC]
+            SG[storage-gateway :50052 gRPC]
+            SD[source-data-service :50053 gRPC]
+            GN[gossip-node :31002 libp2p]
         end
         subgraph "Explorer"
             UI[Explorer UI nginx :80]
             API[Explorer API :8086]
             DB[(PostgreSQL)]
         end
-        P2P[p2pd :30089 / swarm 31001]
         NGINX[nginx :443]
     end
 
@@ -37,54 +40,46 @@ graph TB
         BROWSER[Browser]
     end
 
-    BR -->|"POST /ingest, /auth/token"| NGINX
-    NGINX -->|proxy| ES
+    BR -->|"POST /ingest, /auth/verify"| NGINX
+    NGINX -->|proxy| GW
     BROWSER -->|"https://edge.example.com/"| NGINX
     NGINX -->|proxy /api| API
-    API -->|internal| SC
-    API -->|internal| ES
-    API -->|internal| SG
-    API -->|internal| VR
-    OTH -->|"31001 tcp/udp + 30089"| P2P
-    P2P -->|"POST /events/{topic}"| SC
-    SY -->|"SYNC_P2P_URL"| P2P
+    API -->|internal| GW
+    OTH -->|"31002 tcp"| GN
+    GN -->|"gRPC SyncFetch"| GW
 ```
 
 ---
 
-## 1. Single-host demo setup vs real deployment
+## 1. Single-host deployment vs remote VPS
 
-| Concern | Single-host (demo) | Remote VPS (this guide) |
+| Concern | Single-host (co-located) | Remote VPS (this guide) |
 |---|---|---|
-| Broker → edge | `http://host.docker.internal:8081` (same host) | `https://edge.example.com` (via nginx) |
+| Broker → edge | `https://host.docker.internal:30080` (gateway, same host) | `https://edge.example.com` (via nginx) |
 | Edge-service exposure | Private Docker network only | Public via nginx (TLS) |
 | Explorer UI | `http://localhost:3000` | `https://edge.example.com/` |
 | Explorer API | `http://localhost:8086` | `https://edge.example.com/api` (optional) |
-| P2P swarm | LAN/mesh IP | VPS public IP |
-| sead-sync → p2p | `http://<lan-ip>:30089` | `http://<vps-ip>:30089` |
+| gossip-node libp2p | LAN/mesh IP | VPS public IP |
 
 ---
 
 ## 2. Ports to open on the VPS firewall
 
 > These are the **host** ports that must be reachable from outside. The
-> internal container ports (`8080`, `8081`–`8085`, `8090`) stay private to the
-> Docker network and are **not** exposed directly.
+> internal gRPC ports (`50051`–`50055`) stay private to the Docker network
+> and are **not** exposed directly.
 
 | Port | Transport | Service | Who needs it |
 |---|---|---|---|
 | **80** | TCP | nginx (HTTP → HTTPS redirect) | everyone |
-| **443** | TCP | nginx (TLS: Explorer UI + API + edge proxy) | everyone |
-| **30080** | TCP | sead-core HTTP API (cross-org event fetch) | other SEAD nodes |
-| **30089** | TCP | p2p HTTP API (`/health`, `/peers`, `/events/{topic}`) | sead-sync, other nodes |
-| **31001** | TCP | libp2p swarm (TCP) | other SEAD nodes |
-| **31001** | UDP | libp2p swarm (QUIC) | other SEAD nodes |
-| **30090** | TCP | sead-sync (p2p event sync) | other SEAD nodes |
+| **443** | TCP | nginx (TLS: Explorer UI + API + gateway proxy) | everyone |
+| **30080** | TCP | gateway HTTPS API (cross-org event fetch, ingest, verify) | other SEAD nodes, brokers |
+| **31002** | TCP | gossip-node libp2p peer (frontier dissemination + event fetch) | other SEAD nodes |
 
-**Not exposed** (private to the Docker network): `8081` (edge-service),
-`8082` (storage-gateway), `8083` (auth-service), `8084` (verifier-service),
-`8085` (source-data-service), `8086` (Explorer API — reachable only via nginx
-`/api`), `3000` (Explorer UI — reachable only via nginx `/`).
+**Not exposed** (private to the Docker network): `50051` (sead-core),
+`50052` (storage-gateway), `50053` (source-data-service), `50054` (gateway
+Sync gRPC), `50055` (edge-service), `8086` (Explorer API — reachable only via
+nginx `/api`), `3000` (Explorer UI — reachable only via nginx `/`).
 
 ### Firewall example (UFW)
 
@@ -92,17 +87,14 @@ graph TB
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw allow 30080/tcp
-sudo ufw allow 30089/tcp
-sudo ufw allow 31001/tcp
-sudo ufw allow 31001/udp
-sudo ufw allow 30090/tcp
+sudo ufw allow 31002/tcp
 sudo ufw enable
 ```
 
-> **Hardening (recommended):** `31001` (swarm) and `30089` (p2p API) only need
-> to be reachable by *other SEAD nodes*. If you know their IPs, restrict these
-> to those peers instead of opening them to the whole internet:
-> `sudo ufw allow from <peer-ip> to any port 31001 proto tcp`, etc.
+> **Hardening (recommended):** `31002` (gossip-node libp2p) only needs
+> to be reachable by *other SEAD nodes*. If you know their IPs, restrict it
+> to those peers instead of opening it to the whole internet:
+> `sudo ufw allow from <peer-ip> to any port 31002 proto tcp`, etc.
 
 ---
 
@@ -119,13 +111,35 @@ EDGE_ID=<edge_id_hex>
 EDGE_SIGNING_KEY=<edge_secret_key_hex>
 EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
-SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
-SYNC_P2P_URL=http://<VPS-PUBLIC-IP>:30089   # VPS public IP, NOT http://p2p:30089
+GOSSIP_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
+GOSSIP_OBSERVE_ORGS=<other_org_id_hex>,<another_org_id_hex>
+GOSSIP_BOOTSTRAP=/ip4/<peer-ip>/tcp/31002/p2p/<peerid>
+SEAD_AUTH_SECRET=<shared-secret>         # required in production
 ```
 
-> **`SYNC_P2P_URL`** must use the VPS's **public IP** (or a private IP reachable
-> from the sync container). The p2p sidecar runs with `network_mode: host`, so
-> it is **not** reachable at the `p2p` hostname from the bridge network.
+> **`GOSSIP_BOOTSTRAP`** lists the other nodes' libp2p multiaddrs
+> (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also auto-discover peers on
+> the same subnet. `GOSSIP_OBSERVE_ORGS` enables cross-node sync (the node
+> subscribes to each listed org's `sead-sync/{org}` topic).
+>
+> **Networking vs. authority — four layers.** Reachability and bootstrap are *transport
+> only*; catalog and membership are SEAD authority. They must not be conflated:
+>
+> - **Reachability** — "can I reach any SEAD participant?" (direct IP, static peer, DNS,
+>   relay/rendezvous, mDNS). Networking only.
+> - **Bootstrap** — "can I enter the mesh?" (`GOSSIP_BOOTSTRAP`, DHT, or a relay-only node).  
+>   Networking only; which one you use is up to you.
+> - **Catalog** — "which nodes represent org X?" The org-signed
+>   `ReplicationEndpointCatalog` (event_type 60). SEAD authority begins here.
+> - **Membership** — "can those nodes be trusted as org X?" Org genesis → edge authorization
+>    → the catalog's signature chain. SEAD authority.
+>
+> **The catalog is not a first-contact mechanism** — it cannot bootstrap from zero knowledge.
+> A node must first reach *a* SEAD peer via a transport mechanism (bootstrap, DNS, mDNS, DHT,
+> rendezvous, or relay), then retrieve the catalogs. **Bootstrap establishes connectivity;
+> catalogs establish authority.** Choose the transport that fits your deployment (static
+> seed, DNS/relay for roaming/NAT, mDNS on a trusted LAN, or direct IP); none of these confer
+> org trust. See the main README for the full model.
 
 ### 3.2 Start
 
@@ -133,9 +147,8 @@ SYNC_P2P_URL=http://<VPS-PUBLIC-IP>:30089   # VPS public IP, NOT http://p2p:3008
 docker compose -f docker-compose.remote.yml pull
 docker compose -f docker-compose.remote.yml up -d
 
-# Verify
-curl http://localhost:30080/health
-curl http://localhost:30089/health
+# Verify the gateway is healthy
+curl -k https://localhost:30080/health
 ```
 
 ---
@@ -155,13 +168,12 @@ curl http://127.0.0.1:3000/
 ```
 
 Because the Explorer runs on the **same VPS** as the stack, its `.env` uses the
-internal Docker-network URLs:
+internal Docker-network URLs (via the gateway):
 
 ```bash
-SEAD_CORE_URL=http://sead-core:8080
-EDGE_SERVICE_URL=http://edge-service:8081
-STORAGE_GATEWAY_URL=http://storage-gateway:8082
-VERIFIER_URL=http://verifier:8084
+SEAD_CORE_URL=http://gateway:30080
+EDGE_SERVICE_URL=http://gateway:30080
+STORAGE_GATEWAY_URL=http://gateway:30080
 DATABASE_URL=postgresql://explorer:explorer@sead-explorer-db:5432/sead_explorer
 OBSERVER_ORG_ID=<observer_org_id_hex>
 OBSERVER_NODE_ID=<observer_node_id_hex>
@@ -174,27 +186,80 @@ OBSERVER_NODE_ID=<observer_node_id_hex>
 
 ---
 
-## 5. Deploy the P2P sidecar
+## 5. gossip-node (sync observer)
 
-Deploy the p2p sidecar on the same VPS (see
-[stardome-sead-p2p](https://github.com/Stardome-technology/stardome-sead-p2p)).
+`gossip-node` is included in the SEAD stack compose (`docker-compose.remote.yml`)
+and starts automatically. It runs its own libp2p peer on `31002` and
+publishes/subscribes frontiers on `sead-sync/{org}` topics. `31002` is published on
+the host so other nodes can dial this peer.
+
+### 5.1 The `GOSSIP_BOOTSTRAP` multiaddr format
+
+`GOSSIP_BOOTSTRAP` is a comma-separated list of **libp2p multiaddrs** telling a node which
+peer(s) to dial to enter the mesh. Each entry has the form
+`/ip4/<ip>/tcp/31002/p2p/<peerid>`, but the network component is **not limited to an IP** —
+libp2p multiaddrs also support DNS:
 
 ```bash
-docker compose -f docker-compose.remote.yml pull
-docker compose -f docker-compose.remote.yml up -d
+# IP (LAN / mesh / VPS):
+/ip4/192.168.0.103/tcp/31002/p2p/<peerid>
+/ip4/<VPS-IP>/tcp/31002/p2p/<peerid>
 
-curl http://localhost:30089/health
+# DNS (works when an address record or path resolves the host):
+/dns4/sead.example.org/tcp/31002/p2p/<peerid>
+/dnsaddr/sead.example.org/tcp/31002/p2p/<peerid>
 ```
 
-For other SEAD nodes to reach this VPS node across subnets, configure them with
-this VPS as a DHT bootstrap peer:
+The peer dialed this way becomes a **transport-level entry point** (layer 1–2) — it has no
+org meaning by itself. mDNS and DHT are also available to auto-discover peers on the same
+subnet; `GOSSIP_BOOTSTRAP` is the deterministic static-seed path. Once connected, the node
+retrieves the observed orgs' catalogs over the mesh.
+
+### 5.2 Getting `<PEERID>`
+
+Each `gossip-node` prints its stable (persistent-identity) peer ID at startup:
 
 ```bash
-# On the OTHER nodes' .env — replace <VPS-IP> and <PEER_ID> with real values
-P2P_BOOTSTRAP_PEERS=/ip4/<VPS-IP>/tcp/31001/p2p/<PEER_ID>
+docker logs stardome-sead-gossip-node-1 | grep "peer ID"
+# → [gossip-node] libp2p node started, peer ID: 12D3KooW...
 ```
 
-Get `<PEER_ID>` from this VPS node's `/health` endpoint.
+The peer ID is stable across restarts (backed by `/data/gossip-identity.key`), so you capture
+it **once** and reuse it in other nodes' `GOSSIP_BOOTSTRAP`. You will need the IP or hostname
+of the peer *and* its peer ID to build the entry.
+
+### 5.3 Who gives whom a bootstrap entry
+
+A `GOSSIP_BOOTSTRAP` entry is something you **issue to a peer**, not a claim about org
+membership. Two common cases:
+
+- **A third-party integrator bootstrapping onto your org's nodes.** You give the integrator a
+  multiaddr pointing at *one of your reachable SEAD nodes* (`/ip4/<your-ip>/tcp/31002/p2p/
+  <your-peerid>`). That integrator dials it to contact the mesh and then retrieves *your* org's
+  catalogs to learn which of your nodes legitimately represent the org. This is a **sharing**
+  of a transport entry point — it is not a trust claim about the integrator or your node.
+- **Your own org's "supplementary" (additional) nodes bootstrapping onto each other.** If you
+  run multiple nodes for the same org, list one another's multiaddrs in `GOSSIP_BOOTSTRAP` so
+  they form a direct mesh, and each retrieves the org's catalog to fill in the full node set.
+
+In both cases the entry is **transport only** (layer 1–2). Whether a node may act for an org
+is decided by the org's **catalog** and DAG signatures — `ReplicationEndpointCatalog`
+(event_type 60) lists the nodes + reachable addresses that legitimately represent the org for
+replication — not by the bootstrap list. The same multiaddr can be dialed by a third party
+and by your own supplementary nodes; what changes is only *which orgs* each dial.
+
+For example, if this VPS node is one of org A's replication endpoints and has peer ID `12D3KooW...`:
+
+```bash
+# On a THIRD-PARTY integrator node observing org A:
+GOSSIP_BOOTSTRAP=/ip4/<VPS-IP>/tcp/31002/p2p/12D3KooW...
+GOSSIP_OBSERVE_ORGS=<org_A_hex>
+
+# on your OWN supplementary node for org A:
+GOSSIP_BOOTSTRAP=/ip4/<VPS-IP>/tcp/31002/p2p/12D3KooW...
+GOSSIP_ORG_ID=<org_A_hex>
+GOSSIP_OBSERVE_ORGS=<org_A_hex>,<org_B_hex>
+```
 
 ---
 
@@ -204,8 +269,8 @@ Nginx terminates TLS on `443` and routes:
 
 - `/` → Explorer UI (nginx container on `3000`)
 - `/api` → Explorer API (FastAPI on `8086`)
-- `/ingest`, `/auth/token` → edge-service (`8081`) — **for remote brokers**
-- `/health` → edge-service health (optional)
+- `/ingest`, `/auth/verify` → gateway (`30080`) — **for remote brokers**
+- `/health` → gateway health (optional)
 
 ### 6.1 Install + TLS
 
@@ -254,11 +319,11 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # ── Edge-service: ingest (remote brokers) ──────────────────────────
+    # ── Gateway: ingest (remote brokers) ────────────────────────────────
     # Requires a valid org auth token (Bearer header) — verified by the
-    # edge-service itself against sead-core.
+    # gateway against sead-core.
     location /ingest {
-        proxy_pass http://127.0.0.1:8081;
+        proxy_pass http://127.0.0.1:30080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -267,11 +332,11 @@ server {
         proxy_read_timeout 600s;
     }
 
-    # ── Edge-service: token minting (remote brokers) ───────────────────
-    # Only POST /auth/token is exposed — the key-index admin endpoints stay
-    # internal (reachable via localhost:8081 only).
-    location = /auth/token {
-        proxy_pass http://127.0.0.1:8081;
+    # ── Gateway: auth verify (remote brokers) ───────────────────────────
+    # POST /auth/verify — verifies a CBOR auth token (collapsed from
+    # auth-service). The key-index admin endpoints are internal only.
+    location = /auth/verify {
+        proxy_pass http://127.0.0.1:30080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -279,9 +344,9 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # ── Edge-service health (optional, unauthenticated) ────────────────
+    # ── Gateway health (optional, unauthenticated) ──────────────────────
     location = /health {
-        proxy_pass http://127.0.0.1:8081/health;
+        proxy_pass http://127.0.0.1:30080/health;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
     }
@@ -301,8 +366,8 @@ sudo systemctl reload nginx
 
 ## 7. Point remote brokers at the VPS
 
-The broker reaches the edge-service via `SEAD_EDGE_URL`, which is used as a
-**base URL** — the broker appends `/ingest` and `/auth/token` itself.
+The broker reaches the gateway via `SEAD_EDGE_URL`, which is used as a
+**base URL** — the broker appends `/ingest` and `/auth/verify` itself.
 
 ```bash
 # stardome-sead-broker .env
@@ -314,14 +379,14 @@ SEAD_EDGE_URL=https://edge.example.com
 
 ### 7.1 How `/ingest` is authenticated
 
-The edge-service `/ingest` handler now **requires a valid org auth token** on
-every request. The caller sends the token as a `Bearer` header:
+The gateway `/ingest` handler **requires a valid org auth token** on every
+request. The caller sends the token as a `Bearer` header:
 
 ```
 Authorization: Bearer <base64url-encoded CBOR auth token>
 ```
 
-The edge-service:
+The gateway:
 1. Decodes and parses the token (CBOR).
 2. Resolves the org's public key from sead-core and verifies the XMSS signature.
 3. Checks expiry, scope (`ipfs_pin`), and (if present) `payload_hash` binding.
@@ -340,20 +405,23 @@ this token automatically (see below).
 
 ### 7.2 Broker token flow
 
-The broker resolves the token (per-request `auth_token` → `SEAD_AUTH_TOKEN`
+The broker resolves the token (per-request `auth_token` → `SEAD_AUTH_SECRET`
+The broker resolves the token (per-request `auth_token` → `SEAD_AUTH_SECRET`
 env var) **before** calling `/ingest`, and sends it as a `Bearer` header. No
-code change is needed in the broker `.env` beyond setting `SEAD_AUTH_TOKEN`:
+code change is needed in the broker `.env` beyond setting `SEAD_AUTH_SECRET`:
+code change is needed in the broker `.env` beyond setting `SEAD_AUTH_SECRET`:
 
 ```bash
 # stardome-sead-broker .env
 SEAD_EDGE_URL=https://edge.example.com
-SEAD_AUTH_TOKEN=<base64url-encoded CBOR auth token>   # from POST /auth/token
+SEAD_AUTH_SECRET=<base64url-encoded CBOR auth token>
+SEAD_AUTH_SECRET=<base64url-encoded CBOR auth token>
 ```
 
-> **Note on auto-generation:** because the edge now requires the token *on*
-> ingest, the broker's auto-generation fallback (which needs the `payload_hash`
-> known only *after* ingest) is no longer compatible with an auth-requiring
-> edge. Use a pre-generated token (`SEAD_AUTH_TOKEN` or per-request
+> **Note on auto-generation:** because the gateway now requires the token *on*
+ingest, the broker's auto-generation fallback (which needs the `payload_hash`
+known only *after* ingest) is no longer compatible with an auth-requiring
+edge. Use a pre-generated token (`SEAD_AUTH_SECRET` or per-request
 > `auth_token`) — the recommended production flow.
 
 ---
@@ -362,23 +430,18 @@ SEAD_AUTH_TOKEN=<base64url-encoded CBOR auth token>   # from POST /auth/token
 
 ```bash
 # Stack
-curl http://localhost:30080/health
-curl http://localhost:30089/health
+curl -k https://localhost:30080/health
 
 # Explorer (via nginx)
 curl -k https://edge.example.com/health
 curl -k https://edge.example.com/api/v1/frontier
 
-# Edge proxy (from a remote broker host) — requires a valid auth token
-TOKEN=$(curl -s -X POST https://edge.example.com/auth/token \
-  -H "Content-Type: application/json" -d '{"ttl": 3600}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
-
+# Gateway (from a remote broker host) — requires a valid auth token
 curl -X POST https://edge.example.com/ingest \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d '{"module_id":"<hex>","org_id":"<hex>","edge_id":"<hex>","artifact":"<hex>"}'
 
-# P2P swarm listening
-ss -tulpn | grep 31001
+# gossip-node libp2p listening
+ss -tulpn | grep 31002
 ```

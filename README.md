@@ -9,33 +9,49 @@ produce tokens for IPFS pinning.
 
 ## Architecture
 
-- **sead-core** — event store, DAG maintenance, org/edge key resolution
-- **edge-service** — ingest, receipt, commit, and retrieval APIs
-- **storage-gateway** — evidence artifact distribution (IPFS-backed)
-- **auth-service** — token verification for external services
-- **verifier-service** — independent verification of event chains
-- **source-data-service** — controlled disclosure of source data
-- **sead-sync** — event synchronization across nodes via p2p pubsub
+- **gateway** — single public HTTPS entry point (Go). Terminates TLS, enforces
+  auth, validates requests, and routes to the internal C++ services over gRPC.
+  `auth-service` and `verifier-service` are collapsed into the gateway.
+- **sead-core** — event store, DAG maintenance, org/edge key resolution (gRPC-only)
+- **edge-service** — ingest, receipt, commit, and retrieval APIs (gRPC-only)
+- **storage-gateway** — evidence artifact distribution (gRPC-only); IPFS pinning is now owned by the `pin-service`
+- **pin-service** — Go gRPC service (`sead_rpc.Storage`) that owns the IPFS boundary. Replaces the storage-gateway's IPFS pin leg. Provides `AddToIPFS` and `RetrieveFromIPFS` RPCs. Edge-service pins via this service on `pin-service:50056`
+- **source-data-service** — controlled disclosure of source data (gRPC-only)
+- **gossip-node** — C2 sync observer (Go): native libp2p Gossipsub frontier
+  dissemination + DHT/mDNS peer discovery + gRPC fetch/validate.
 
-> **⚠️ Public port convention:** The published host ports `30080` (sead-core)
-> and `30090` (sead-sync) are **standardized across all public deployments**
-> and must not be changed in this compose file. If you need different ports,
-> override them via environment variables or maintain your own copy of the
-> compose file. The internal container ports (`8080`, `8081`–`8085`, `8090`)
-> are private to the stack and can be freely customized.
+> **Go Gateway migration (phase 4.4):** the C++ services are **gRPC-only** and
+> publish no public HTTP ports. They are reachable only on the internal
+> `sead-network` bridge via the Go gateway. `auth-service` and `verifier-service`
+> are collapsed into the gateway (no longer standalone services). Health is
+> probed via `grpc.health.v1.Health`.
+
+> **Sync transport (gossip):** the sync path is a **native libp2p Gossipsub
+> mesh** via `gossip-node`. `gossip-node` runs its own libp2p peer (port 31002),
+> publishes/subscribes frontiers on `sead-sync/{org}` topics, and
+> fetches/validates events over gRPC (local sead-core + gateway). No HTTP/SSE
+> in the sync path.
+
+> **⚠️ Public port convention:** The published host port `30080` (gateway) is
+> **standardized across all public deployments** and must not be changed in this
+> compose file. If you need a different port, override it via environment
+> variables or maintain your own copy of the compose file. The internal gRPC
+> ports (`50051`–`50055`) are private to the stack and can be freely customized.
 
 ## Public ports to open
 
 For an integrator deploying this stack, these are the **public** host ports that
 must be reachable from outside (open in the firewall / cloud security group):
 
-- **`30080/tcp`** — sead-core HTTP API (event store, org/edge key resolution, cross-org event fetch)
-- **`30090/tcp`** — sead-sync (p2p event synchronization)
+- **`30080/tcp`** — gateway HTTPS API (all public endpoints: event store, org/edge
+  key resolution, cross-org event fetch, ingest, receipts, verification)
+- **`31002/tcp`** — gossip-node libp2p peer. The sync mesh dials
+  peer nodes on this port (`/ip4/<ip>/tcp/31002`). Must be reachable between
+  nodes for cross-node frontier dissemination + event fetch.
 
-All other service ports (`8080`, `8081`–`8085`, `8090`) are **private** to the
-Docker network and should **not** be exposed publicly. If you only need local
-access, you can leave `30080`/`30090` closed to the internet and reach them via
-`localhost`.
+All other service ports (`50051`–`50055`) are **private** to the Docker network
+and should **not** be exposed publicly. If you only need local access, you can
+leave `30080` closed to the internet and reach it via `localhost`.
 
 ---
 
@@ -89,17 +105,88 @@ EDGE_ID=<edge_id_hex>
 EDGE_SIGNING_KEY=<edge_secret_key_hex>
 EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
 EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
-SYNC_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
-SYNC_P2P_URL=http://<this-node-lan-ip>:30089
+# Gateway auth (required in production — see the gateway README)
+SEAD_AUTH_SECRET=<shared-secret>
+# gossip-node (C2 sync observer): this node's own org + orgs it observes.
+GOSSIP_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
+GOSSIP_OBSERVE_ORGS=<other_org_id_hex>,<another_org_id_hex>
+GOSSIP_BOOTSTRAP=/ip4/<peer-ip>/tcp/31002/p2p/<peerid>
 EOF
 ```
 
-> **Key env for the p2p sync** — `SYNC_ORG_ID` and `SYNC_P2P_URL` configure
-> the `sead-sync` service (real p2p sync, replaces the removed p2p-bridge).
-> `SYNC_ORG_ID` is **required** (service exits without it) and must match
-> `EDGE_ORG_ID`. `SYNC_P2P_URL` must use this node's **LAN/mesh IP**, not
-> `http://p2p:30089` — p2pd runs with `network_mode: host` and is not
-> reachable at the `p2p` hostname from the bridge network.
+> **Key env for the gossip sync** — `GOSSIP_ORG_ID` configures the
+> `gossip-node` C2 observer (its own org, always observed). `GOSSIP_OBSERVE_ORGS`
+> enables cross-node sync: the node subscribes to each listed org's
+> `sead-sync/{org}` topic and publishes frontiers for it. Observation is
+> **unilateral** — no publisher consent needed, so each node simply lists the
+> orgs it wants to verify for. `GOSSIP_BOOTSTRAP` lists the other nodes'
+> libp2p multiaddrs (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also
+> auto-discover peers on the same subnet.
+
+> **How a node finds the orgs it observes — four layers.** SEPARATE **networking** from
+> **SEAD authority**. There are four distinct layers; the first two are transport, the last
+> two are SEAD accountability. Do not conflate them:
+>
+> 1. **Reachability** — "Can I reach *any* SEAD participant?" Mechanisms: a direct IP,
+>    a static peer, DNS, a relay/rendezvous point, or mDNS. This is purely networking; it
+>    carries no organization meaning.
+> 2. **Bootstrap** — "Can I enter the mesh?" Mechanisms: a bootstrap peer
+>    (`GOSSIP_BOOTSTRAP`), a DHT server, or a relay-only node. Still purely networking.
+> 3. **Catalog** — "Which nodes legitimately represent Org X?" Answer: the organization's
+>    **replication endpoint catalog** — an org-signed DAG event
+>    (`replication_endpoint_catalog`, event_type 60) that each org publishes to assert its
+>    own replication nodes. SEAD authority begins here.
+> 4. **Membership** — "Can those nodes be trusted as Org X?" Answer: the DAG — org genesis,
+>    edge authorization, and the catalog's own signature chain. SEAD authority.
+>
+> **The catalog is authoritative for membership discovery but is NOT a first-contact
+> mechanism.** It cannot bootstrap from zero knowledge. A participant must first obtain
+> connectivity to *at least one* reachable SEAD node through a transport-level mechanism
+> (static bootstrap, DNS, mDNS, DHT, rendezvous, or relay); only *then* can it retrieve the
+> organization catalogs and resolve authorized replication membership. **Bootstrap
+> establishes connectivity; catalogs establish authority.**
+>
+> - **To be discoverable**, an org's operator must publish a catalog listing their nodes
+>   (node_id + reachable addresses). This is an org decision, like authorizing an edge — it
+>   is never inferred from the mesh.
+> - **To bootstrap**, a node only needs *one* reachable peer (`GOSSIP_BOOTSTRAP`, mDNS, DHT,
+>   relay, rendezvous, or static config) to reach the mesh, then it can retrieve the observed
+>   orgs' catalogs and frontiers.
+> - The bootstrap peer can be shared out-of-band by any means (IP, DNS, a partner's node) — it
+>   does **not** have to be published in the SEAD DAG. The **catalog** is what makes an org's
+>   nodes *authoritatively* discoverable.
+> - **Which transport to use is up to you.** Choose the reachability/bootstrap mechanism best
+>   suited to your deployment: a relay or rendezvous point for roaming or NAT-trapped agents,
+>   DNS records as a public entry point, static seeds among nodes you operate, mDNS on a
+>   trusted LAN, or plain direct IP. **None of these transport choices confer or require org
+>   trust — catalogs do.**
+> - A relay or rendezvous point only provides layers 1–2. It is a safe, purely-transport
+>   entry that relays no org content and cannot forge org-signed events; it may only affect
+>   availability (relaying or withholding gossip), never integrity.
+> - **Bootstrap vs. catalog membership is an integrator decision.** A node you share as an
+>   entry point is a value you **MAY** let a partner organization use for bootstrapping — it
+>   is **not** assumed to be part of the catalog set and publish flow. It may or may not be,
+>   depending on your choice: you can keep a **static bootstrap node** and update the
+>   frontier-dispatching nodes over time via catalogs, or use the same node(s) for both. The
+>   two roles are independent.
+>
+> **Trust model:** bootstrapping is *transport only* — dialing a peer does not
+> mean trusting its org. Trust comes from the DAG (org genesis → edge
+> authorization → XMSS signatures), never from who you dialed. A bootstrap peer
+> can relay or withhold gossip (availability), but it cannot forge org-signed
+> events (integrity). Only catalog-listed, org-signed endpoints are
+> authoritative for an org's membership.
+
+> **Cross-node sync (DAG-native auth replication)** — when a node observes
+> another org, foreign `edge_commit` events are validated only **after** their
+> authorization graph (`edge_authorization` → `org_genesis`) is replicated to
+> the local `sead-core`. `gossip-node` recursively fetches these dependencies
+> (via the events' `dependency_refs` field, with indexed fallback for events
+> without explicit refs), submits them in topological order, and holds events
+> that await dependencies until they resolve. There is **no trusted-sync
+> bypass**: every foreign event still passes sead-core's normal
+> signature-verification path. Genuinely invalid events are rejected and
+> dropped, never retried.
 
 ### Start
 
@@ -109,35 +196,83 @@ Pull the latest images, then start the stack:
 docker compose -f docker-compose.remote.yml pull
 docker compose -f docker-compose.remote.yml up -d
 
-# Verify all services are healthy
-curl http://localhost:30080/health
+# Verify the gateway is healthy (TLS on by default; -k for self-signed)
+curl -k https://localhost:30080/health
 ```
+
+> **⚠️ About `-k` in the curl examples below.** The `-k` flag disables TLS
+> certificate verification. It is used throughout this guide because the
+> **isolated/own-party** deployment uses a **self-signed** cert, which curl
+> would otherwise reject. For a **production/cross-org** deployment with a
+> **public cert** (e.g. Let's Encrypt), **drop `-k`** so the standard PKI
+> trust store verifies the gateway — or, for a private CA, replace `-k` with
+> `--cacert <ca.crt>` to trust that specific CA. Using `-k` against a public
+> cert silently disables the very verification the cert is meant to provide.
+>
+> The examples below use a `$CURL_TLS` variable so you can set it once per
+> shell: `export CURL_TLS="-k"` (self-signed/isolated) or
+> `export CURL_TLS=""` / `export CURL_TLS="--cacert /path/to/ca.crt"`
+> (public/private CA). The health check above keeps `-k` inline for brevity.
+
+> **⚠️ Gateway TLS — you must provide a certificate.** The gateway terminates
+> TLS using the cert/key you point `GATEWAY_TLS_CERT`/`GATEWAY_TLS_KEY` at
+> (default `/etc/gateway/certs/server.crt` / `.key`, mounted from `./secrets`).
+> If you start the stack without placing `server.crt` + `server.key` in
+> `./secrets/`, the gateway will fail to serve HTTPS. See the
+> [gateway README — TLS section](https://github.com/Stardome-technology/stardome-sead-gateway#tls-public-cert-production-vs-self-signed-isolatedown-party)
+> for how to choose between a public cert (production/cross-org) and a
+> self-signed cert (isolated/own-party), and how to generate them.
 
 ### Configuration reference
 
 | Variable | Service | Required | Default | Description |
 |----------|---------|----------|---------|-------------|
 | `LOG_LEVEL` | all | No | `info` | Logging verbosity |
-| `SEAD_CORE_PORT` | sead-core | No | `8080` | Internal container port (private) |
 | `EDGE_ORG_ID` | edge-service | **†** | — | Organization ID (hex) |
 | `EDGE_ID` | edge-service | **†** | — | Edge device ID (hex) |
 | `EDGE_SIGNING_KEY` | edge-service | **†** | — | Edge XMSS private key (hex) |
 | `EDGE_ORG_SIGNING_KEY` | edge-service | **†** | — | Org XMSS key for auth tokens (hex) |
 | `EDGE_ORG_PUBLIC_KEY` | edge-service | No | — | Org XMSS public key (hex) |
 | `EDGE_TOKEN_TTL` | edge-service | No | `300` | Auth token TTL in seconds |
-| `EDGE_STORAGE_GATEWAY_URL` | edge-service | No | `http://localhost:8082` | Storage gateway URL |
-| `EDGE_WATCHDOG_INTERVAL_SEC` | edge-service | No | `30` | Watchdog interval |
+| `EDGE_STORAGE_GATEWAY_URL` | edge-service | No | `storage-gateway:50052` | Storage gateway gRPC target |
+| `EDGE_PIN_SERVICE_URL` | edge-service | No | `pin-service:50056` | Pin service gRPC target — replaces the storage-gateway IPFS pin leg; edge pins via the Go pin service (`sead_rpc.Storage`) |
+| `EDGE_WATCHDOG_INTERVAL_SEC` | edge-service | No | `1` | DAG commit (watchdog) cadence in seconds — near-realtime commit publish |
+| `EDGE_PIN_INTERVAL_SEC` | edge-service | No | `30` | IPFS pin loop cadence (independent, slow) |
+| `EDGE_PIN_MAX_RETRIES` | edge-service | No | `-1` | Max pin retries (`-1` = unlimited) |
+| `EDGE_PIN_BACKOFF_BASE_SEC` | edge-service | No | `30` | Pin retry exponential backoff base (seconds) |
+| `EDGE_PIN_BACKOFF_CAP_SEC` | edge-service | No | `86400` | Pin retry max backoff delay (seconds) |
 | `EDGE_COMMIT_STRATEGY` | edge-service | No | `single` | `single` or `batch` |
 | `EDGE_BATCH_FLUSH_INTERVAL_SEC` | edge-service | No | `300` | Batch flush interval |
-| `STORAGE_GATEWAY_PORT` | storage-gateway | No | `8082` | Internal container port (private) |
+| `EDGE_AUTHORIZATION_EVENT_ID` | edge-service | No | *(auto)* | Event_id (64 hex) of the `edge_authorization` that activated this edge, written into each `edge_commit`'s `dependency_refs` so commits resolve to their authorization graph on-chain. **Optional** — if unset, edge-service auto-resolves it from sead-core at startup; set it to override |
 | `IPFS_API_BASE_URL` | storage-gateway | No | `https://ipfs.stardome.cloud` | IPFS API endpoint |
-| `AUTH_SKEW_TOLERANCE_SEC` | auth-service | No | `30` | Token expiry skew tolerance |
-| `AUTH_KEY_CACHE_TTL_SEC` | auth-service | No | `60` | Org key cache TTL |
-| `VERIFIER_SOURCE_DATA_BASE_URL` | verifier-service | No | `http://source-data-service:8085` | Source-data URL |
 | `SOURCE_DATA_TRUSTED_VERIFIERS` | source-data-service | No | — | Comma-separated hex org_ids |
-| `SYNC_ORG_ID` | sead-sync | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; p2p sync identity |
-| `SYNC_P2P_URL` | sead-sync | **†** | — | p2p URL at the **node's LAN/mesh IP** (e.g. `http://192.168.60.1:30089`); required for inter-node sync |
-| `SEAD_CORE_PUBLIC_PORT` | all | No | `30080` | **Public** — published host port for cross-org event fetch |
+| `GOSSIP_ORG_ID` | gossip-node | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; gossip-node's own org (always observed) |
+| `GOSSIP_OBSERVE_ORGS` | gossip-node | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
+| `GOSSIP_BOOTSTRAP` | gossip-node | No | — | Comma-separated libp2p multiaddrs of other nodes to dial at startup (`/ip4/<ip>/tcp/31002/p2p/<peerid>`). A **transport entry point** to join the mesh — not org-specific; any reachable peer works. mDNS/DHT also discover peers |
+| `GOSSIP_LISTEN` | gossip-node | No | `/ip4/0.0.0.0/tcp/31002` | gossip-node libp2p listen multiaddr |
+| `GOSSIP_HEARTBEAT_SEC` | gossip-node | No | `10` | Frontier publish interval (seconds) |
+| `GOSSIP_CORE` | gossip-node | No | `sead-core:50051` | Local sead-core gRPC target |
+| `GOSSIP_GATEWAY` | gossip-node | No | `gateway:50054` | Local gateway Sync gRPC target |
+| `GOSSIP_MDNS` | gossip-node | No | `true` | Enable mDNS LAN peer discovery |
+| `GOSSIP_DHT` | gossip-node | No | `true` | Enable Kademlia DHT peer discovery |
+| `GOSSIP_PNET` | gossip-node | No | `false` | Enable private-network enforcement |
+| `SEAD_AUTH_SECRET` | gateway | **†** | — | Shared secret the gateway requires as `Authorization: Bearer <value>` on its public HTTPS endpoints. It guards the gateway's **public** API (the gRPC calls between the internal C++ services and `gossip-node` do **not** use it). **Empty (`""`) disables auth** — the gateway then accepts any request with no token, which is only safe for a localhost/isolated node; any **non-empty** value becomes a hard, single accepted Bearer (not "any string"). Set it (e.g. `openssl rand -hex 32`) whenever `:30080` could be reached beyond your own host |
+| `GATEWAY_TLS_ENABLED` | gateway | No | `true` | Enable TLS termination (set false to disable) |
+| `GATEWAY_TLS_CERT` / `GATEWAY_TLS_KEY` | gateway | No | `/etc/gateway/certs/server.crt` / `.key` | TLS cert/key paths (mounted from `./secrets`). **Production/cross-org:** use a public cert (Let's Encrypt). **Isolated/own-party deployment:** self-signed is fine (see the gateway README for the distinction) |
+| `GATEWAY_AUTH_CBOR_ENABLED` | gateway | No | `true` | CBOR auth-token verification (collapsed from auth-service) |
+| `GATEWAY_METRICS_ENABLED` | gateway | No | `true` | Enable `/metrics` endpoint |
+| `GATEWAY_HEALTH_BACKENDS` | gateway | No | `sead-core,edge-service,storage,source-data` | Backends the gateway `/health` probes |
+| `SVC_SEAD_CORE_GRPC` | gateway | No | `sead-core:50051` | sead-core gRPC target |
+| `SVC_EDGE_SERVICE_GRPC` | gateway | No | `edge-service:50055` | edge-service gRPC target |
+| `SVC_STORAGE_GRPC` | gateway | No | `storage-gateway:50052` | storage-gateway gRPC target |
+| `SVC_SOURCE_DATA_GRPC` | gateway | No | `source-data-service:50053` | source-data-service gRPC target |
+| `GATEWAY_GRPC_PORT` | gateway | No | `50054` | Gateway Sync gRPC port |
+
+> **Gateway config:** the full gateway configuration (TLS, auth, timeouts,
+> gRPC targets) is documented in the
+> [stardome-sead-gateway](https://github.com/Stardome-technology/stardome-sead-gateway)
+> README. The gateway is the single public surface; the C++ services are
+> gRPC-only and publish no public HTTP ports.
 
 ---
 
@@ -291,8 +426,11 @@ docker run --rm -v "$(pwd):/data" \
   --out-file /data/envelope.hex
 
 # POST the file contents as the JSON value
-curl -X POST http://localhost:30080/events \
+# (the gateway requires a Bearer token — set SEAD_AUTH_SECRET in .env)
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS -X POST https://localhost:30080/events \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
 
@@ -343,11 +481,13 @@ The `--not-before` and `--not-after` default to `now` and `0` respectively
 if omitted. The `not_before`/`not_after` here are the edge's authorization
 window — independent of the org genesis values.
 
-POST the output hex to sead-core:
+POST the output hex to sead-core (via the gateway):
 
 ```bash
-curl -X POST http://localhost:30080/events \
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS -X POST https://localhost:30080/events \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
   -d "{\"envelope_hex\": \"$(cat envelope.hex)\"}"
 ```
 
@@ -400,90 +540,62 @@ builds this for you, but here is what it contains:
 ### Verify
 
 ```bash
-curl http://localhost:30080/orgs/<org_id_hex>
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS https://localhost:30080/orgs/<org_id_hex> \
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 # Expected: {"status":"active","org_pk_hex":"<pk>"}
 
-curl http://localhost:30080/edges/<org_id_hex>/<edge_id_hex>
+curl $CURL_TLS https://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 # Expected: {"status":"authorized","edge_pk_hex":"<pk>"}
 ```
 
 ---
 
-## Step 4 — Generate auth tokens (IPFS pinning)
+## Step 4 — IPFS pinning
 
-The auth stack only verifies tokens — it never generates them. The
-**edge-service** container holds the org signing key in memory (loaded
-from `EDGE_ORG_SIGNING_KEY` / `EDGE_ORG_SIGNING_KEY_FILE` at startup)
-and exposes a `POST /auth/token` API.
+In the Go Gateway architecture, the **gateway** is the single public surface
+for IPFS pinning. The `auth-service` and `verifier-service` are collapsed into
+the gateway, and the C++ services are gRPC-only (no public HTTP ports).
 
-> **✅  XMSS index persistence:** The edge-service now stores the org
-> signing key's current one-time index in a `key_index` SQLite table
-> alongside the receipt store (both in the `sead_data` volume). On any
-> container restart (crash, `docker compose restart`, or `down` + `up`),
-> the index is reloaded from the database, so token generation resumes
-> where it left off. The `sead_data` volume **must** persist across
-> restarts — this is the default for Docker volumes. Using
-> `docker compose down -v` destroys both the receipt store and the key
-> index; in that case, generate a fresh keypair.
+### Pin an artifact
 
-### Generate an org-wide token (no payload binding)
+The gateway exposes `POST /pin` (native Go handler). It requires a valid CBOR
+auth token for the target org, passed in the request body:
 
 ```bash
-# The edge-service must be running. Generate a token with no expiry
-# and no payload_hash — reusable across all artifacts.
-curl -X POST http://localhost:8081/auth/token \
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS -X POST https://localhost:30080/pin \
   -H "Content-Type: application/json" \
-  -d '{"ttl": 0}'
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
+  -d '{
+    "artifact": "<artifact_hex>",
+    "auth_token": "<base64url-encoded CBOR auth token>"
+  }'
 
 # Response:
 # {
-#   "token": "<base64url-encoded CBOR>",
-#   "expiry": 0,
-#   "note": "org-wide token — no expiry, no payload binding. Use with caution."
+#   "cid": "<ipfs-cid>",
+#   "payload_hash": "<hex>",
+#   "status": "pinned"
 # }
 ```
 
-The `ttl` field is optional (default `0` = no expiry). Set a positive
-value in seconds for a time-limited token:
+Retrieve a pinned artifact by its payload hash:
 
 ```bash
-curl -X POST http://localhost:8081/auth/token \
-  -H "Content-Type: application/json" \
-  -d '{"ttl": 3600}'
-
-# Response includes the current index:
-# {
-#   "token": "...",
-#   "expiry": 3600,
-#   "current_index": 1
-# }
+# CURL_TLS: "-k" for self-signed/isolated, "" or "--cacert <ca.crt>" for public/private CA
+curl $CURL_TLS https://localhost:30080/cid/<payload_hash_hex> \
+  -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 ```
 
-### Inspect and manage the key index
-
-The edge-service provides two admin endpoints for the key index:
-
-```bash
-# Query current index state
-curl http://localhost:8081/auth/key-index
-# Response: {"key_id": "<hex>", "current_index": <uint>, "persisted": true}
-
-# Reset index to 0 (⚠️  use with caution — only if you are sure)
-curl -X POST http://localhost:8081/auth/key-index/reset
-# Response: {"key_id": "<hex>", "current_index": 0, "status": "reset"}
-```
-
-### Use the token
-
-```bash
-TOKEN=$(curl -s http://localhost:8081/auth/token \
-  -H "Content-Type: application/json" \
-  -d '{"ttl": 3600}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
-
-curl -X POST https://ipfs.stardome.cloud/api/v0/add \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "file=@endorse_att.bin"
-```
+> **Token minting:** the edge-service auto-generates per-pin auth tokens
+> internally (signed by the org XMSS key) when it commits an artifact and
+> pins it to IPFS via the Go pin service (`sead_rpc.Storage`) over gRPC.
+> The standalone `POST /auth/token` HTTP endpoint on edge-service is
+> **removed** in the Go Gateway migration — edge-service is gRPC-only.
+> For the IPFS auth stack deployment (minimal sead-core + gateway), see
+> [stardome-ipfs](https://github.com/Stardome-technology/stardome-ipfs).
 
 ### Token structure
 
@@ -503,8 +615,8 @@ Token is **base64url-encoded** CBOR (`RFC 4648 §5`, no padding).
 > **Note:** The standalone `gen-token` CLI tool exists for build-time
 > testing but is **not recommended** for production use, because each
 > invocation loads the key from hex and always starts at index 0.
-> Always prefer the `POST /auth/token` API on a running edge-service
-> to ensure the XMSS one-time index advances correctly.
+> Prefer the edge-service's internal per-pin token generation to ensure
+> the XMSS one-time index advances correctly.
 
 ---
 
