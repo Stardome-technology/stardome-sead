@@ -123,32 +123,52 @@ EOF
 > libp2p multiaddrs (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also
 > auto-discover peers on the same subnet.
 
-> **How a node finds the orgs it observes — bootstrap vs. catalog.**
-> `GOSSIP_BOOTSTRAP` is only a **transport-level entry point**: it tells the
-> node which peer(s) to dial to join the mesh. It is **not** org-specific and
-> does **not** need to be a node of the observed org — any reachable peer in
-> the mesh works, because Gossipsub relays messages on the subscribed topics.
-> The *authoritative* answer to "which nodes represent org X, and at which
-> endpoints" is the org's **replication endpoint catalog** — an org-signed DAG
-> event (`replication_endpoint_catalog`, event_type 60) that each org publishes
-> to assert its own replication nodes. So:
+> **How a node finds the orgs it observes — four layers.** SEPARATE **networking** from
+> **SEAD authority**. There are four distinct layers; the first two are transport, the last
+> two are SEAD accountability. Do not conflate them:
 >
-> - **To be discoverable**, an org's operator must publish a catalog listing
->   their nodes (node_id + reachable addresses). This is an org decision, like
->   authorizing an edge — it is not inferred from the mesh.
-> - **To bootstrap**, a node only needs *one* reachable peer to join the mesh
->   (via `GOSSIP_BOOTSTRAP`, mDNS, or DHT). Once in the mesh it can receive the
->   observed orgs' catalogs and frontiers.
-> - The bootstrap peer can be shared out-of-band by any means (IP, DNS, a
->   partner's node) — it does not have to be published in the SEAD DAG. The
->   catalog is what makes an org's nodes *authoritatively* discoverable.
-> - **Bootstrap vs. catalog membership is an integrator decision.** A node you
->   share as a bootstrap entry point is a value you **MAY** let a partner
->   organization use for bootstrapping — it is **not** assumed to be part of
->   the catalog set and publish flow. It may or may not be, depending on the
->   integrator's choice: you can keep a **static bootstrap node** and update
->   the frontier-dispatching nodes over time via catalogs, or use the same
->   node(s) for both scopes. The two roles are independent.
+> 1. **Reachability** — "Can I reach *any* SEAD participant?" Mechanisms: a direct IP,
+>    a static peer, DNS, a relay/rendezvous point, or mDNS. This is purely networking; it
+>    carries no organization meaning.
+> 2. **Bootstrap** — "Can I enter the mesh?" Mechanisms: a bootstrap peer
+>    (`GOSSIP_BOOTSTRAP`), a DHT server, or a relay-only node. Still purely networking.
+> 3. **Catalog** — "Which nodes legitimately represent Org X?" Answer: the organization's
+>    **replication endpoint catalog** — an org-signed DAG event
+>    (`replication_endpoint_catalog`, event_type 60) that each org publishes to assert its
+>    own replication nodes. SEAD authority begins here.
+> 4. **Membership** — "Can those nodes be trusted as Org X?" Answer: the DAG — org genesis,
+>    edge authorization, and the catalog's own signature chain. SEAD authority.
+>
+> **The catalog is authoritative for membership discovery but is NOT a first-contact
+> mechanism.** It cannot bootstrap from zero knowledge. A participant must first obtain
+> connectivity to *at least one* reachable SEAD node through a transport-level mechanism
+> (static bootstrap, DNS, mDNS, DHT, rendezvous, or relay); only *then* can it retrieve the
+> organization catalogs and resolve authorized replication membership. **Bootstrap
+> establishes connectivity; catalogs establish authority.**
+>
+> - **To be discoverable**, an org's operator must publish a catalog listing their nodes
+>   (node_id + reachable addresses). This is an org decision, like authorizing an edge — it
+>   is never inferred from the mesh.
+> - **To bootstrap**, a node only needs *one* reachable peer (`GOSSIP_BOOTSTRAP`, mDNS, DHT,
+>   relay, rendezvous, or static config) to reach the mesh, then it can retrieve the observed
+>   orgs' catalogs and frontiers.
+> - The bootstrap peer can be shared out-of-band by any means (IP, DNS, a partner's node) — it
+>   does **not** have to be published in the SEAD DAG. The **catalog** is what makes an org's
+>   nodes *authoritatively* discoverable.
+> - **Which transport to use is up to you.** Choose the reachability/bootstrap mechanism best
+>   suited to your deployment: a relay or rendezvous point for roaming or NAT-trapped agents,
+>   DNS records as a public entry point, static seeds among nodes you operate, mDNS on a
+>   trusted LAN, or plain direct IP. **None of these transport choices confer or require org
+>   trust — catalogs do.**
+> - A relay or rendezvous point only provides layers 1–2. It is a safe, purely-transport
+>   entry that relays no org content and cannot forge org-signed events; it may only affect
+>   availability (relaying or withholding gossip), never integrity.
+> - **Bootstrap vs. catalog membership is an integrator decision.** A node you share as an
+>   entry point is a value you **MAY** let a partner organization use for bootstrapping — it
+>   is **not** assumed to be part of the catalog set and publish flow. It may or may not be,
+>   depending on your choice: you can keep a **static bootstrap node** and update the
+>   frontier-dispatching nodes over time via catalogs, or use the same node(s) for both. The
+>   two roles are independent.
 >
 > **Trust model:** bootstrapping is *transport only* — dialing a peer does not
 > mean trusting its org. Trust comes from the DAG (org genesis → edge
