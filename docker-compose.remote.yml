@@ -7,9 +7,6 @@
 # terminates TLS, enforces auth, and routes to the internal services over the
 # shared `sead-network` bridge. `auth-service` and `verifier-service` are
 # collapsed into the gateway (no longer standalone services).
-#
-# Pin service (go-pin-service-httplib-removal): edge-service now pins via the
-# pin-service gRPC endpoint instead of the storage-gateway IPFS pin leg.
 
 services:
   sead-core:
@@ -43,7 +40,7 @@ services:
       - EDGE_ORG_SIGNING_KEY=${EDGE_ORG_SIGNING_KEY:-}
       - EDGE_ORG_PUBLIC_KEY=${EDGE_ORG_PUBLIC_KEY:-}
       - EDGE_TOKEN_TTL=${EDGE_TOKEN_TTL:-300}
-      - EDGE_PIN_SERVICE_URL=${EDGE_PIN_SERVICE_URL:-pin-service:50056}
+      - EDGE_STORAGE_GATEWAY_URL=${EDGE_STORAGE_GATEWAY_URL:-storage-gateway:50052}
       - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-1}
       - EDGE_PIN_INTERVAL_SEC=${EDGE_PIN_INTERVAL_SEC:-30}
       - EDGE_PIN_MAX_RETRIES=${EDGE_PIN_MAX_RETRIES:--1}
@@ -60,7 +57,7 @@ services:
               "--org-signing-key", "${EDGE_ORG_SIGNING_KEY}",
               "--org-public-key", "${EDGE_ORG_PUBLIC_KEY}",
               "--token-ttl", "${EDGE_TOKEN_TTL:-300}",
-              "--pin-service-url", "${EDGE_PIN_SERVICE_URL:-pin-service:50056}",
+              "--storage-gateway-url", "${EDGE_STORAGE_GATEWAY_URL:-storage-gateway:50052}",
               "--sead-core-url", "sead-core:50051",
               "--watchdog-interval", "${EDGE_WATCHDOG_INTERVAL_SEC:-1}",
               "--commit-strategy", "${EDGE_COMMIT_STRATEGY:-single}",
@@ -73,26 +70,8 @@ services:
     depends_on:
       sead-core:
         condition: service_healthy
-      pin-service:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "grpc_health_probe", "-addr=localhost:50055"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    networks:
-      - sead-network
-
-  pin-service:
-    image: ghcr.io/stardome-technology/stardome-sead/pin-service:latest
-    # No public ports — reachable only on sead-network
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - SERVICE_NAME=pin-service
-      - IPFS_BASE_URL=${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud:443}
-    command: ["pin-service", "--ipfs-url", "${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud:443}"]
-    healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=localhost:50056"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -204,13 +183,12 @@ services:
       - GATEWAY_WRITE_TIMEOUT=${GATEWAY_WRITE_TIMEOUT:-30s}
       - GATEWAY_IDLE_TIMEOUT=${GATEWAY_IDLE_TIMEOUT:-90s}
       - GATEWAY_PROXY_TIMEOUT=${GATEWAY_PROXY_TIMEOUT:-30s}
-      - GATEWAY_HEALTH_BACKENDS=${GATEWAY_HEALTH_BACKENDS:-sead-core,edge-service,storage,source-data,pin}
+      - GATEWAY_HEALTH_BACKENDS=${GATEWAY_HEALTH_BACKENDS:-sead-core,edge-service,storage,source-data}
       # Internal C++ services (gRPC-only, Go Gateway migration phase 4.4)
       - SVC_SEAD_CORE_GRPC=${SVC_SEAD_CORE_GRPC:-sead-core:50051}
       - SVC_EDGE_SERVICE_GRPC=${SVC_EDGE_SERVICE_GRPC:-edge-service:50055}
       - SVC_STORAGE_GRPC=${SVC_STORAGE_GRPC:-storage-gateway:50052}
       - SVC_SOURCE_DATA_GRPC=${SVC_SOURCE_DATA_GRPC:-source-data-service:50053}
-      - SVC_PIN_GRPC=${SVC_PIN_GRPC:-pin-service:50056}
       - GATEWAY_GRPC_PORT=${GATEWAY_GRPC_PORT:-50054}
       # Cross-node sync fetch (Phase 8): peer gateways this gateway fetches
       # missing events from over HTTPS. Comma-separated base URLs.
