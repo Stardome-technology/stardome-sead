@@ -2,11 +2,12 @@
 # Usage: docker compose -f docker-compose.remote.yml up -d
 #
 # Go Gateway migration (phase 4.4): the C++ services (sead-core, edge-service,
-# storage-gateway, source-data-service, sead-sync) are gRPC-only and publish no
+# pin-service, source-data-service, sead-sync) are gRPC-only and publish no
 # public HTTP ports. The Go gateway is the single public HTTPS entry point: it
 # terminates TLS, enforces auth, and routes to the internal services over the
 # shared `sead-network` bridge. `auth-service` and `verifier-service` are
-# collapsed into the gateway (no longer standalone services).
+# collapsed into the gateway (no longer standalone services). pin-service is the
+# sole storage authority (AddToIPFS/RetrieveFromIPFS/ResolveCIDByPayloadHash).
 
 services:
   sead-core:
@@ -40,7 +41,7 @@ services:
       - EDGE_ORG_SIGNING_KEY=${EDGE_ORG_SIGNING_KEY:-}
       - EDGE_ORG_PUBLIC_KEY=${EDGE_ORG_PUBLIC_KEY:-}
       - EDGE_TOKEN_TTL=${EDGE_TOKEN_TTL:-300}
-      - EDGE_STORAGE_GATEWAY_URL=${EDGE_STORAGE_GATEWAY_URL:-storage-gateway:50052}
+      - EDGE_PIN_SERVICE_URL=${EDGE_PIN_SERVICE_URL:-pin-service:50056}
       - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-1}
       - EDGE_PIN_INTERVAL_SEC=${EDGE_PIN_INTERVAL_SEC:-30}
       - EDGE_PIN_MAX_RETRIES=${EDGE_PIN_MAX_RETRIES:--1}
@@ -57,7 +58,7 @@ services:
               "--org-signing-key", "${EDGE_ORG_SIGNING_KEY}",
               "--org-public-key", "${EDGE_ORG_PUBLIC_KEY}",
               "--token-ttl", "${EDGE_TOKEN_TTL:-300}",
-              "--storage-gateway-url", "${EDGE_STORAGE_GATEWAY_URL:-storage-gateway:50052}",
+              "--pin-service-url", "${EDGE_PIN_SERVICE_URL:-pin-service:50056}",
               "--sead-core-url", "sead-core:50051",
               "--watchdog-interval", "${EDGE_WATCHDOG_INTERVAL_SEC:-1}",
               "--commit-strategy", "${EDGE_COMMIT_STRATEGY:-single}",
@@ -70,6 +71,8 @@ services:
     depends_on:
       sead-core:
         condition: service_healthy
+      pin-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "grpc_health_probe", "-addr=localhost:50055"]
       interval: 15s
@@ -78,22 +81,21 @@ services:
     networks:
       - sead-network
 
-  storage-gateway:
-    image: ghcr.io/stardome-technology/stardome-sead/storage-gateway:latest
-    # No public ports — gRPC-only, reachable on sead-network via the gateway
+  pin-service:
+    image: ghcr.io/stardome-technology/stardome-sead/pin-service:latest
+    # No public ports — gRPC-only, sole storage authority (AddToIPFS,
+    # RetrieveFromIPFS, ResolveCIDByPayloadHash); reachable on sead-network.
     volumes:
       - sead_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - SERVICE_NAME=storage-gateway
-      - IPFS_API_BASE_URL=${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud}
-    command: ["storage-gateway", "--port", "50052", "--db", "/data/storage.db",
-              "--ipfs-url", "${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud}"]
-    depends_on:
-      sead-core:
-        condition: service_healthy
+      - SERVICE_NAME=pin-service
+      - IPFS_BASE_URL=${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud:443}
+      - PIN_SERVICE_DB=${PIN_SERVICE_DB:-/data/pin-service.db}
+    command: ["pin-service", "--port", "50056", "--ipfs-url", "${IPFS_API_BASE_URL:-https://ipfs.stardome.cloud:443}",
+              "--db", "${PIN_SERVICE_DB:-/data/pin-service.db}"]
     healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=localhost:50052"]
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50056"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -187,7 +189,7 @@ services:
       # Internal C++ services (gRPC-only, Go Gateway migration phase 4.4)
       - SVC_SEAD_CORE_GRPC=${SVC_SEAD_CORE_GRPC:-sead-core:50051}
       - SVC_EDGE_SERVICE_GRPC=${SVC_EDGE_SERVICE_GRPC:-edge-service:50055}
-      - SVC_STORAGE_GRPC=${SVC_STORAGE_GRPC:-storage-gateway:50052}
+      - SVC_STORAGE_GRPC=${SVC_STORAGE_GRPC:-pin-service:50056}
       - SVC_SOURCE_DATA_GRPC=${SVC_SOURCE_DATA_GRPC:-source-data-service:50053}
       - GATEWAY_GRPC_PORT=${GATEWAY_GRPC_PORT:-50054}
       # Cross-node sync fetch (Phase 8): peer gateways this gateway fetches
@@ -204,7 +206,7 @@ services:
         condition: service_healthy
       edge-service:
         condition: service_healthy
-      storage-gateway:
+      pin-service:
         condition: service_healthy
       source-data-service:
         condition: service_healthy
