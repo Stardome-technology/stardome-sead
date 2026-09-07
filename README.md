@@ -343,6 +343,16 @@ standard `FLAG_SIGN` wire path — no firmware changes needed.
 > date +%s
 > ```
 >
+> **What `not_after` really means (read this).** `not_before`/`not_after` are the
+> **overall validity window** of the org key (org-genesis) or edge authorization
+> (edge-authorization). They are **NOT** a window within which you must perform a
+> single one-off action. While `now` is inside `[not_before, not_after]` the key is
+> authorized; **after `not_after` passes, verifiers reject new events from it** (e.g.
+> sead-core returns `ERR_EDGE_NOT_AUTHORIZED: no active edge authorization`), and a
+> previously-working edge stops committing. Set `not_after = 0` for **no expiry**, or
+> pick a comfortably long window (years) for long-lived deployments. A bounded
+> `not_after` means the org/edge must be **re-enrolled** (regenerate + re-post
+> org-genesis / edge-authorization) once the window closes.
 > Convert a date to UNIX seconds:
 > ```bash
 > date -d "2026-03-01 00:00:00 UTC" +%s
