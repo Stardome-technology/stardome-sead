@@ -447,6 +447,15 @@ curl $CURL_TLS -X POST https://localhost:30080/events \
 > **Tip:** The envelope hex can be very large (XMSS signatures are ~18 KB).
 > Using `--out-file` avoids terminal scroll and copy-paste truncation.
 
+> **Capture the org-genesis event_id (needed in 3c).** The POST response
+> returns the org_genesis `event_id` (a 64-hex string). Save it — the
+> `edge-authorization` command in step 3c must pass it as
+> `--genesis-event-id`. Example:
+> ```bash
+> # response: {"event_id":"<64-hex>","event_type":1,"event_type_name":"org_genesis","status":"accepted"}
+> GENESIS_EVENT_ID=<64-hex>
+> ```
+
 **What's inside the envelope** — the CBOR body is equivalent to this JSON:
 
 ```json
@@ -475,17 +484,29 @@ registered). This bootstraps the org's identity in the DAG.
 ### 3c — Authorize the edge (EdgeAuthorization)
 
 ```bash
+# The 64-hex org_genesis event_id captured in step 3b:
+GENESIS_EVENT_ID=<org_genesis_event_id_64hex>
+
 docker run --rm -v "$(pwd):/data" \
   ghcr.io/stardome-technology/stardome-sead/gen-bootstrap edge-authorization \
   --org-id <org_id_hex> \
   --org-signing-key <org_secret_key_hex> \
   --org-public-key <org_public_key_hex> \
+  --genesis-event-id "$GENESIS_EVENT_ID" \
   --edge-id <edge_id_hex> \
   --edge-pk <edge_pk_hex> \
   --not-before <unix_epoch_sec> \
   --not-after <unix_epoch_sec> \
   --out-file /data/envelope.hex
 ```
+
+> `--genesis-event-id` is **required**: it is written into the
+> edge-authorization's `dependency_refs` (field 94), pointing at the
+> `org_genesis` from step 3b. sead-core resolves the authorization against
+> that specific genesis (content-addressed authority resolution) and rejects
+> an `edge_authorization` with no such reference (`ERR_MISSING_DEPENDENCY`).
+> If the referenced genesis isn't present yet, sead-core holds the
+> authorization pending and promotes it once the genesis lands.
 
 The `--not-before` and `--not-after` default to `now` and `0` respectively
 if omitted. The `not_before`/`not_after` here are the edge's authorization
