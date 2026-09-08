@@ -18,7 +18,7 @@ services:
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=sead-core
-    command: ["sead-core", "--port", "50051", "--db", "/data/sead.db", "--gateway-sync", "gateway:50054"]
+    command: ["sead-core", "--port", "50051", "--db", "/data/sead.db"]
     healthcheck:
       test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
       interval: 15s
