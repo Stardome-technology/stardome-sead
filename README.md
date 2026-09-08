@@ -190,49 +190,27 @@ EOF
 
 ### Start
 
-> **Two boot modes — read this before your first `up -d`.**
-> `edge-service` fails-fast (exits) on a node where its `edge_authorization`
-> is not yet resolvable in sead-core — this prevents it from ever emitting
-> commits whose `dependency_refs[94]` would be empty and rejected. Enrollment
-> (POST org-genesis / edge-authorization) is served by the **gateway → sead-core**
-> path and does **not** need edge-service, so the gateway does **not**
-> hard-depend on edge-service.
-
-#### First-time / blank-node boot (after `down -v` or a fresh deploy)
-
-`up -d` starts `sead-core`, `pin-service`, `source-data-service` and the
-gateway; **`edge-service` exits — this is expected on a blank node.** The
-gateway reports `degraded` on `/health` until edge-service is healthy, which
-is non-blocking. Complete enrollment in [Step 3](#step-3--bootstrap-genesis)
-(POST org-genesis, then edge-authorization), then bring edge-service up:
-
-```bash
-docker compose -f docker-compose.remote.yml up -d
-# edge-service exits with "No edge_authorization event_id configured or
-# resolvable" — expected on a blank node. Proceed to Step 3 enrollment.
-
-# After enrollment (Step 3), start edge-service:
-docker compose -f docker-compose.remote.yml up -d edge-service
-```
-
-#### Ordinary up/down cycles after enrollment
-
-Use the normal command — edge-service resolves its authorization from
-sead-core at startup:
+Start the stack:
 
 ```bash
 docker compose -f docker-compose.remote.yml pull
 docker compose -f docker-compose.remote.yml up -d
 
-# Verify the gateway is healthy (TLS on by default; -k for self-signed)
+# Verify the gateway is up (TLS on by default; -k for self-signed)
 curl -k https://localhost:30080/health
 ```
 
-> **Pre-bind edge-service (optional):** if you prefer edge-service to boot
-> immediately even on a blank node, generate the edge-authorization first and
-> set `EDGE_AUTHORIZATION_EVENT_ID=<64-hex>` in `.env` (see the config table).
-> sead-core still verifies the authorization before accepting any commit — this
-> only tells edge-service which ref to write into `dependency_refs[94]`.
+> **On a fresh node (or after `down -v`) `edge-service` exits at startup —
+> expected.** `edge-service` fails-fast until its `edge_authorization` is
+> resolvable in sead-core, so it won't emit commits with empty
+> `dependency_refs[94]`. Enrollment (POST org-genesis / edge-authorization)
+> goes through the **gateway → sead-core** path and does not need edge-service,
+> so the gateway does not wait on it. `/health` will show `3 healthy /
+> 1 unhealthy` (edge-service) until you enroll — follow [Step 3](#step-3--bootstrap-genesis)
+> and it will be brought up at the end.
+>
+> After the org is enrolled, `edge-service` resolves its authorization from
+> sead-core at startup, so ordinary `up -d` / `down` cycles work normally.
 
 > **⚠️ About `-k` in the curl examples below.** The `-k` flag disables TLS
 > certificate verification. It is used throughout this guide because the
@@ -311,6 +289,10 @@ curl -k https://localhost:30080/health
 ---
 
 ## Step 3 — Bootstrap genesis
+
+> This section is for a **fresh/blank node** (or a **renewal** when a bounded
+> `not_after` closes — same procedure, done before the new window is needed).
+> Follow it top to bottom. The stack is already up from [Step 2 / Start](#start).
 
 Before the DAG accepts events, register your organization and authorize
 your edge. The easiest way is using the `gen-bootstrap` tool, which
@@ -402,6 +384,15 @@ standard `FLAG_SIGN` wire path — no firmware changes needed.
 > explicitly to avoid clock-skew mismatch.**
 
 ### 3b — Register the organization (OrgGenesis)
+
+Confirm the stack is up and note the baseline health — on a fresh node
+`edge-service` is **not** yet running (expected):
+
+```bash
+curl -k https://localhost:30080/health
+# Expected on a fresh node: total_services=4, healthy=3, unhealthy=1
+# (unhealthy = edge-service, which starts only after 3c enrolls the edge).
+```
 
 The `gen-bootstrap` tool can read the attestation file directly from step 3a.
 It is available as a Docker image — no source build needed:
@@ -614,6 +605,23 @@ curl $CURL_TLS https://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
   -H "Authorization: Bearer $SEAD_AUTH_SECRET"
 # Expected: {"status":"authorized","edge_pk_hex":"<pk>"}
 ```
+
+### 3d — Bring up edge-service
+
+The org and edge are now enrolled. Start `edge-service` (it auto-resolves the
+`edge_authorization` event_id from sead-core at startup) and confirm the whole
+stack is healthy:
+
+```bash
+docker compose -f docker-compose.remote.yml up -d edge-service
+
+# Expect 4/4 healthy (edge-service now ok)
+curl -k https://localhost:30080/health
+```
+
+Enrollment is complete. From here ordinary `up -d` / `down` cycles work
+normally.
+
 
 ---
 
