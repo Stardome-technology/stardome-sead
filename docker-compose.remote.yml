@@ -201,10 +201,16 @@ services:
       # GATEWAY_PEER_CA_CERT to a PEM CA bundle for a private CA.
       - GATEWAY_PEER_TLS_INSECURE=${GATEWAY_PEER_TLS_INSECURE:-false}
       - GATEWAY_PEER_CA_CERT=${GATEWAY_PEER_CA_CERT:-}
+    # NOTE: edge-service is intentionally NOT a hard dependency here.
+    # On a blank node edge-service fails-fast until an edge_authorization is
+    # resolvable in sead-core, and enrollment (POST org-genesis /
+    # edge-authorization) is served by the gateway -> sead-core path. Making the
+    # gateway wait on edge-service would deadlock first-time enrollment.
+    # edge-service is gRPC-only (no public port); it starts later via
+    # `docker compose ... up -d edge-service` once enrollment is done. The
+    # gateway's /health reports "degraded" until then — honest, not blocking.
     depends_on:
       sead-core:
-        condition: service_healthy
-      edge-service:
         condition: service_healthy
       pin-service:
         condition: service_healthy

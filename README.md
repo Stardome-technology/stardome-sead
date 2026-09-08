@@ -190,7 +190,35 @@ EOF
 
 ### Start
 
-Pull the latest images, then start the stack:
+> **Two boot modes — read this before your first `up -d`.**
+> `edge-service` fails-fast (exits) on a node where its `edge_authorization`
+> is not yet resolvable in sead-core — this prevents it from ever emitting
+> commits whose `dependency_refs[94]` would be empty and rejected. Enrollment
+> (POST org-genesis / edge-authorization) is served by the **gateway → sead-core**
+> path and does **not** need edge-service, so the gateway does **not**
+> hard-depend on edge-service.
+
+#### First-time / blank-node boot (after `down -v` or a fresh deploy)
+
+`up -d` starts `sead-core`, `pin-service`, `source-data-service` and the
+gateway; **`edge-service` exits — this is expected on a blank node.** The
+gateway reports `degraded` on `/health` until edge-service is healthy, which
+is non-blocking. Complete enrollment in [Step 3](#step-3--bootstrap-genesis)
+(POST org-genesis, then edge-authorization), then bring edge-service up:
+
+```bash
+docker compose -f docker-compose.remote.yml up -d
+# edge-service exits with "No edge_authorization event_id configured or
+# resolvable" — expected on a blank node. Proceed to Step 3 enrollment.
+
+# After enrollment (Step 3), start edge-service:
+docker compose -f docker-compose.remote.yml up -d edge-service
+```
+
+#### Ordinary up/down cycles after enrollment
+
+Use the normal command — edge-service resolves its authorization from
+sead-core at startup:
 
 ```bash
 docker compose -f docker-compose.remote.yml pull
@@ -199,6 +227,12 @@ docker compose -f docker-compose.remote.yml up -d
 # Verify the gateway is healthy (TLS on by default; -k for self-signed)
 curl -k https://localhost:30080/health
 ```
+
+> **Pre-bind edge-service (optional):** if you prefer edge-service to boot
+> immediately even on a blank node, generate the edge-authorization first and
+> set `EDGE_AUTHORIZATION_EVENT_ID=<64-hex>` in `.env` (see the config table).
+> sead-core still verifies the authorization before accepting any commit — this
+> only tells edge-service which ref to write into `dependency_refs[94]`.
 
 > **⚠️ About `-k` in the curl examples below.** The `-k` flag disables TLS
 > certificate verification. It is used throughout this guide because the
