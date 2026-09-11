@@ -21,7 +21,10 @@ services:
     ports:
       - "31002:31002/tcp"
     volumes:
-      - gossip_data:/data
+      # Bind-mount the identity key file from host to persist PeerID across
+      # restarts and `docker compose down -v` — the relay PeerID is the
+      # bootstrap anchor hardcoded in every POC's GOSSIP_BOOTSTRAP.
+      - ${GOSSIP_IDENTITY_DIR:-~/.sead/gossip-keys}/gossip-identity.key:/data/gossip-identity.key
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=gossip-relay
@@ -38,5 +41,7 @@ services:
     command: ["ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
     restart: unless-stopped
 
-volumes:
-  gossip_data:
+networks:
+  sead-network:
+    name: sead-network
+    driver: bridge

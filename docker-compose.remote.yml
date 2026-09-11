@@ -127,12 +127,14 @@ services:
     # - On the sead-network bridge so it reaches sead-core/gateway by name.
     # - Publish the libp2p TCP port so other POCs reach this peer at the node's
     #   LAN/mesh IP (e.g. /ip4/192.168.60.1/tcp/31002 and mDNS).
-    # - Persistent identity key (gossip_data volume) keeps the PeerId stable
-    #   across restarts so published bootstrap/catalog multiaddrs stay valid.
+    # - Persistent identity key (bind-mounted host file) keeps the PeerId stable
+    #   across restarts and `docker compose down -v` so published bootstrap/
+    #   catalog multiaddrs stay valid.
     ports:
       - "31002:31002/tcp"
     volumes:
-      - gossip_data:/data
+      # Bind-mount the identity key file from host to persist PeerID across resets
+      - ${GOSSIP_IDENTITY_DIR:-~/.sead/gossip-keys}/gossip-identity.key:/data/gossip-identity.key
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=gossip-node
@@ -229,7 +231,6 @@ services:
 
 volumes:
   sead_data:
-  gossip_data:
 
 networks:
   sead-network:
