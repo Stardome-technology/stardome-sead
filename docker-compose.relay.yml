@@ -21,10 +21,12 @@ services:
     ports:
       - "31002:31002/tcp"
     volumes:
-      # Bind-mount the identity key file from host to persist PeerID across
-      # restarts and `docker compose down -v` — the relay PeerID is the
-      # bootstrap anchor hardcoded in every POC's GOSSIP_BOOTSTRAP.
-      - ${GOSSIP_IDENTITY_DIR:-~/.sead/gossip-keys}/gossip-identity.key:/data/gossip-identity.key
+      # Bind-mount the identity key DIRECTORY from host to persist PeerID across
+      # restarts and `docker compose down -v` — the relay PeerID is the bootstrap
+      # anchor hardcoded in every POC's GOSSIP_BOOTSTRAP. Mounting a directory
+      # (not a file) avoids Docker auto-creating the source as a directory when
+      # the file doesn't exist yet; gossip-node creates gossip-identity.key inside.
+      - ${GOSSIP_IDENTITY_DIR:-~/.sead/gossip-keys}:/data/gossip-keys
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=gossip-relay
@@ -34,11 +36,11 @@ services:
       - GOSSIP_MDNS=${GOSSIP_MDNS:-true}
       - GOSSIP_DHT=${GOSSIP_DHT:-true}
       - GOSSIP_PNET=${GOSSIP_PNET:-false}
-      - GOSSIP_IDENTITY_KEY_FILE=${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}
+      - GOSSIP_IDENTITY_KEY_FILE=${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}
     # Entrypoint override: see docker-compose.remote.yml gossip-node. The image's
     # ENTRYPOINT is "gossip-node", so the `command` wrapper must run via sh -c.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-identity.key}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
+    command: ["ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
     restart: unless-stopped
 
 networks:
