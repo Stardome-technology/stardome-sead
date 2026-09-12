@@ -12,6 +12,7 @@
 services:
   sead-core:
     image: ghcr.io/stardome-technology/stardome-sead/sead-core:latest
+    restart: unless-stopped
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
