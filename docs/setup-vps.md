@@ -228,6 +228,22 @@ The peer ID is stable across restarts (backed by `/data/gossip-identity.key`), s
 it **once** and reuse it in other nodes' `GOSSIP_BOOTSTRAP`. You will need the IP or hostname
 of the peer *and* its peer ID to build the entry.
 
+> ⚠️ **Do NOT let the identity key location change.** The key is a host bind-mount
+> (`GOSSIP_IDENTITY_DIR`, default `~/.sead/gossip-keys`). That default is resolved **relative
+> to the directory where you run `docker compose`**, *not* relative to `$HOME`. If you bring
+> the stack up from a different working directory (e.g. `cd ~` instead of
+> `cd ~/stardome-sead`), the `~` expands to a **different host path**, so `gossip-node` finds
+> no existing key there, generates a **new** one, and the PeerID **rotates**. Every other node
+> that hardcoded the old PeerID in `GOSSIP_BOOTSTRAP` then fails to connect with
+> `peer id mismatch: expected … but remote key matches …`, and the mesh silently stops sharing
+> frontiers (`topic peers=0`, "no catalog in DAG state").
+>
+> To avoid this: always `cd` into the same directory before `up -d`, and/or pin
+> `GOSSIP_IDENTITY_DIR` to an **absolute** path. If a PeerID ever does rotate, update the
+> affected `GOSSIP_BOOTSTRAP` entries to the new PeerID (`docker logs <gossip> | grep "peer ID"`).
+> The wipe/provision flow (`compose down -v`, re-enrollment) does **not** touch this key — it
+> survives, as intended.
+
 ### 5.3 Who gives whom a bootstrap entry
 
 A `GOSSIP_BOOTSTRAP` entry is something you **issue to a peer**, not a claim about org

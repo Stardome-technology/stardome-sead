@@ -138,6 +138,16 @@ services:
       # restarts and `docker compose down -v`. Mounting a directory (not a file)
       # avoids Docker auto-creating a bind-mount source as a directory when the
       # file doesn't exist yet; gossip-node creates gossip-identity.key inside it.
+      #
+      # ⚠️ DO NOT change this path (GOSSIP_IDENTITY_DIR). The default
+      # `~/.sead/gossip-keys` is resolved relative to the COMPOSE WORKING
+      # DIRECTORY (where you run `docker compose`), NOT to $HOME. If you bring
+      # the stack up from a different directory (e.g. `cd ~` instead of
+      # `cd ~/stardome-sead`), `~` expands to a DIFFERENT host path and
+      # gossip-node generates a NEW identity key → the PeerID ROTATES, breaking
+      # every published GOSSIP_BOOTSTRAP / catalog multiaddr (peers start
+      # failing with "peer id mismatch"). Always `cd` into the same directory
+      # before `up -d`, or pin GOSSIP_IDENTITY_DIR to an absolute path.
       - ${GOSSIP_IDENTITY_DIR:-~/.sead/gossip-keys}:/data/gossip-keys
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}

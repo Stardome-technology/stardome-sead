@@ -26,6 +26,15 @@ services:
       # anchor hardcoded in every POC's GOSSIP_BOOTSTRAP. Mounting a directory
       # (not a file) avoids Docker auto-creating the source as a directory when
       # the file doesn't exist yet; gossip-node creates gossip-identity.key inside.
+      #
+      # ⚠️ DO NOT change this path (GOSSIP_IDENTITY_DIR). The default
+      # `~/.sead/gossip-keys` is resolved relative to the COMPOSE WORKING
+      # DIRECTORY (where you run `docker compose`), NOT to $HOME. Bringing the
+      # relay up from a different directory expands `~` to a different host path
+      # and gossip-node generates a NEW identity key → the relay PeerID ROTATES,
+      # breaking every POC's GOSSIP_BOOTSTRAP ("peer id mismatch"). Always `cd`
+      # into the same directory before `up -d`, or pin GOSSIP_IDENTITY_DIR to an
+      # absolute path.
       - ${GOSSIP_IDENTITY_DIR:-~/.sead/gossip-keys}:/data/gossip-keys
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
