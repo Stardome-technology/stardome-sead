@@ -202,7 +202,7 @@ libp2p multiaddrs also support DNS:
 
 ```bash
 # IP (LAN / mesh / VPS):
-/ip4/192.168.0.103/tcp/31002/p2p/<peerid>
+/ip4/192.168.50.104/tcp/31002/p2p/<peerid>
 /ip4/<VPS-IP>/tcp/31002/p2p/<peerid>
 
 # DNS (works when an address record or path resolves the host):
