@@ -41,6 +41,11 @@ services:
       - SERVICE_NAME=gossip-relay
       # Deliberately NO GOSSIP_ORG_ID and NO GOSSIP_OBSERVE_ORGS: relay-only.
       - GOSSIP_LISTEN=${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002}
+      # Externally reachable multiaddr to advertise in place of the container-
+      # internal host.Addrs() (e.g. the bat0 mesh IP). Set on the relay to
+      # /ip4/192.168.60.4/tcp/31002 so peers redial a routable address
+      # after a mesh flap. Empty = advertise observed addrs unchanged.
+      - GOSSIP_ADVERTISE=${GOSSIP_ADVERTISE:-}
       - GOSSIP_BOOTSTRAP=${GOSSIP_BOOTSTRAP:-}
       - GOSSIP_MDNS=${GOSSIP_MDNS:-true}
       - GOSSIP_DHT=${GOSSIP_DHT:-true}
@@ -49,7 +54,7 @@ services:
     # Entrypoint override: see docker-compose.remote.yml gossip-node. The image's
     # ENTRYPOINT is "gossip-node", so the `command` wrapper must run via sh -c.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
+    command: ["ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ -n \"${GOSSIP_ADVERTISE}\" ] && ARGS=\"$$ARGS --advertise ${GOSSIP_ADVERTISE}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
     restart: unless-stopped
 
 networks:

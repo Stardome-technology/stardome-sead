@@ -155,6 +155,11 @@ services:
       - GOSSIP_ORG_ID=${GOSSIP_ORG_ID:-}
       - GOSSIP_OBSERVE_ORGS=${GOSSIP_OBSERVE_ORGS:-}
       - GOSSIP_LISTEN=${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002}
+      # Externally reachable multiaddr to advertise in place of the container-
+      # internal host.Addrs() (e.g. the bat0 mesh IP). Set per POC to
+      # /ip4/192.168.60.<n>/tcp/31002 so peers redial a routable address
+      # after a mesh flap. Empty = advertise observed addrs unchanged.
+      - GOSSIP_ADVERTISE=${GOSSIP_ADVERTISE:-}
       - GOSSIP_BOOTSTRAP=${GOSSIP_BOOTSTRAP:-}
       - GOSSIP_HEARTBEAT_SEC=${GOSSIP_HEARTBEAT_SEC:-10}
       - GOSSIP_CORE=${GOSSIP_CORE:-sead-core:50051}
@@ -170,7 +175,7 @@ services:
     # at the first non-flag arg ("sh"), and the binary boots with defaults
     # (relay-only + port 9001), never receiving --own-org/--orgs/--listen.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ARGS=\"--own-org ${GOSSIP_ORG_ID:-} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --edge ${GOSSIP_EDGE:-edge-service:50055} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_OBSERVE_ORGS}\" ] && ARGS=\"$$ARGS --orgs ${GOSSIP_OBSERVE_ORGS}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
+    command: ["ARGS=\"--own-org ${GOSSIP_ORG_ID:-} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --edge ${GOSSIP_EDGE:-edge-service:50055} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_OBSERVE_ORGS}\" ] && ARGS=\"$$ARGS --orgs ${GOSSIP_OBSERVE_ORGS}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ -n \"${GOSSIP_ADVERTISE}\" ] && ARGS=\"$$ARGS --advertise ${GOSSIP_ADVERTISE}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
     depends_on:
       gateway:
         condition: service_healthy
