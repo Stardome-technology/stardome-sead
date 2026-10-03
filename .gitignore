@@ -1,5 +1,6 @@
 # Runtime env (user-specific, not committed)
 .env
+secrets/
 
 # Build-only env (never committed)
 .env.build
