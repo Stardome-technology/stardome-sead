@@ -693,11 +693,8 @@ Token is **base64url-encoded** CBOR (`RFC 4648 §5`, no padding).
 
 ---
 
-## Next steps
+## Git workflow
 
-- **IPFS auth** — Deploy the minimal auth stack alongside an IPFS node:
-  [stardome-ipfs](https://github.com/Stardome-technology/stardome-ipfs)
-- **Explorer** — Read-only operational dashboard:
-  [stardome-sead-explorer](https://github.com/Stardome-technology/stardome-sead-explorer)
-- **Full bootstrap reference** — Detailed CBOR assembly and edge cases:
-  [`docs/bootstrap-genesis.md`](docs/bootstrap-genesis.md)
+This repository follows GitHub Flow (https://docs.github.com/en/get-started/using-github/github-flow).
+The authoritative rules for contributors and agents are in the `## Git workflow`
+section of [AGENTS.md](AGENTS.md).
