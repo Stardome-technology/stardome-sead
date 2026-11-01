@@ -305,6 +305,15 @@ signature produced by the Stardome hardware module (SGE/SSP) over the
 CBOR array `[org_id, org_pk, not_before, not_after]`. This proves the
 module's XMSS key is installed in a genuine Stardome device.
 
+> **Multiple modules and the org lifecycle.** OrgGenesis accepts **one or
+> more** endorsements (k ≥ 1). The enrolled-module set is bound to the *org*
+> (any enrolled module may attest for any of the org's edges), it only ever
+> **grows** (add modules later via `org_key_revoke` → re-genesis; removal
+> requires a new org key), and it is enforced only on the challenge path
+> (`/verify`), never at ingest. "Organization" here is a functional unit —
+> the smallest logical unit that can exist on the SEAD and spin edges — not
+> necessarily a company. See [docs/module-endorsement.md](docs/module-endorsement.md).
+
 The module's XMSS private key lives inside the hardware — it cannot be
 exported. You must connect the module via UART and use
 `stardome-client endorse` to request the signature.
