@@ -71,7 +71,22 @@ of trust. Keep enrolled sets disjoint per operational owner.
 
 ## Tooling note
 
-`gen-bootstrap org-genesis` currently embeds exactly **one** endorsement per
-run (`--attestation-file` or `--module-*` args). The protocol accepts many;
-multi-endorsement CLI support is on the roadmap. Until then, add a second
-module via the revoke → re-genesis lifecycle above.
+`gen-bootstrap org-genesis --attestation-file` is **repeatable**: pass one
+attestation file per module and the genesis carries all of them, in argument
+order (duplicate modules are rejected by the tool before signing). Example
+with two modules, both endorsing the same window:
+
+```bash
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-genesis \
+  --org-id <org_id_hex> \
+  --org-signing-key <org_secret_key_hex> \
+  --org-public-key <org_public_key_hex> \
+  --attestation-file /data/endorse_att_m1.bin \
+  --attestation-file /data/endorse_att_m2.bin \
+  --not-before <unix_epoch_sec> \
+  --not-after <unix_epoch_sec>
+```
+
+Modules added **after** the genesis still join via the revoke → re-genesis
+lifecycle above.
