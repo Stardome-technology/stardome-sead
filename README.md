@@ -434,6 +434,13 @@ The `--attestation-file` option extracts the module's public key, Merkle root,
 and XMSS signature from the attestation CBOR binary, and derives the
 `module_id` as `SHAKE256(module_pk)` automatically.
 
+> **Multiple modules in one genesis:** `--attestation-file` is **repeatable** —
+> pass one file per module (each produced by `stardome-client endorse` with
+> the **same** `--org-id/--org-pk/--not-before/--not-after`) and the genesis
+> enrolls all of them. Duplicate modules are rejected before signing. Example:
+> add `--attestation-file /data/endorse_att_m2.bin` to the command above.
+> See [docs/module-endorsement.md](docs/module-endorsement.md#tooling-note).
+
 Alternatively, you can pass individual module arguments (legacy):
 
 ```bash
