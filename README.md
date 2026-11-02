@@ -121,7 +121,12 @@ EOF
 > **unilateral** — no publisher consent needed, so each node simply lists the
 > orgs it wants to verify for. `GOSSIP_BOOTSTRAP` lists the other nodes'
 > libp2p multiaddrs (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also
-> auto-discover peers on the same subnet.
+> auto-discover peers on the same subnet. On **Internet-facing** edges also set
+> `GOSSIP_ADVERTISE=/ip4/<public_ip>/tcp/31002` — without it the node advertises its
+> container IP and every peer dial fails ("no good addresses" / "dial to self") — and
+> keep `GOSSIP_IDENTITY_KEY_FILE` **inside** the mounted volume dir
+> (`/data/gossip-keys/gossip-identity.key`); a path outside it regenerates the PeerId
+> on every container recreate and invalidates every published bootstrap multiaddr.
 
 > **How a node finds the orgs it observes — four layers.** SEPARATE **networking** from
 > **SEAD authority**. There are four distinct layers; the first two are transport, the last
@@ -261,6 +266,8 @@ curl -k https://localhost:30080/health
 | `GOSSIP_ORG_ID` | gossip-node | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; gossip-node's own org (always observed) |
 | `GOSSIP_OBSERVE_ORGS` | gossip-node | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
 | `GOSSIP_BOOTSTRAP` | gossip-node | No | — | Comma-separated libp2p multiaddrs of other nodes to dial at startup (`/ip4/<ip>/tcp/31002/p2p/<peerid>`). A **transport entry point** to join the mesh — not org-specific; any reachable peer works. mDNS/DHT also discover peers |
+| `GOSSIP_ADVERTISE` | gossip-node | No | — | Multiaddr this node advertises to peers (`/ip4/<public_ip>/tcp/31002`). **Required on Internet-facing edges**: without it the node advertises its container IP and every peer dial fails ("no good addresses" / "dial to self") |
+| `GOSSIP_IDENTITY_KEY_FILE` | gossip-node | No | `/data/gossip-keys/gossip-identity.key` | Persistent libp2p identity key path. Must be **inside** the mounted `gossip_data` volume dir — a path outside it is not persisted, so the PeerId is regenerated on every recreate and published bootstrap multiaddrs go stale ("peer id mismatch") |
 | `GOSSIP_LISTEN` | gossip-node | No | `/ip4/0.0.0.0/tcp/31002` | gossip-node libp2p listen multiaddr |
 | `GOSSIP_HEARTBEAT_SEC` | gossip-node | No | `10` | Frontier publish interval (seconds) |
 | `GOSSIP_CORE` | gossip-node | No | `sead-core:50051` | Local sead-core gRPC target |
