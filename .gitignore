@@ -14,3 +14,10 @@ secrets/
 # ── Semble ──────────────────────────────────────────────────────────────────
 .semble-cache/
 .git/semble/
+
+# ── Personal, never committed ────────────────────────────────────────────────
+# Per-user folder for keys, drafts and local skills: .local/<github-username>/
+.local/
+# Claude Code entry points (the repo's instructions live in AGENTS.md)
+CLAUDE.md
+CLAUDE.local.md
