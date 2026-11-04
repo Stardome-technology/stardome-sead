@@ -677,6 +677,14 @@ curl $CURL_TLS -X POST https://localhost:30080/pin \
 # }
 ```
 
+> **`payload_hash` is SHAKE256-256** (64 hex chars) of the raw artifact bytes —
+> the same digest as the DAG `payload_hash` (`edge_commit` body key 3) and the
+> auth-token `payload_hash` field (key 8). It is echoed from the pin service,
+> which keys its CID tracker by exactly this value, so it is always resolvable
+> via `GET /cid/{payload_hash}`. Do **not** substitute a SHA-256 of the
+> artifact: hardware-attestation internals are SHA-256, but the DAG/pin key is
+> SHAKE256 (see `docs/13-sead-identity-and-hash-map.md` §5).
+
 Retrieve a pinned artifact by its payload hash:
 
 ```bash
