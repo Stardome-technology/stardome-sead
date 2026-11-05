@@ -1,0 +1,9 @@
+schema: spec-driven
+
+operations:
+  apply:
+    guidance:
+      - >-
+        Implement each change on its own branch, feat/<change-id>
+        (bug/<change-id> for a bug fix), spun from origin/<default-branch>,
+        as AGENTS.md `## Git workflow` describes.
