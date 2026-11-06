@@ -271,11 +271,55 @@ curl -X POST \
 
 ## Key revocation
 
-To revoke a compromised org key:
+Revoking an org key is a two-step operation: **generate** the signed
+`org_key_revoke` envelope with the `gen-bootstrap` tool, then **POST** it.
+
+> **Security:** like `org-genesis`, the revoke envelope must be built on a
+> secure, offline laptop — it is signed with the **current (active) org
+> signing key**, the same key material used for genesis.
+
+### 1. Generate the revoke envelope
+
+```bash
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-key-revoke \
+  --org-id <org_id_hex> \
+  --org-signing-key <current_org_secret_key_hex> \
+  --org-public-key <current_org_public_key_hex> \
+  --reason "key rotation" \
+  --out-file /data/org_revoke.hex
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--org-id` | Yes | Organization ID (hex) of the key being revoked |
+| `--org-signing-key` | Yes | The **active** org XMSS secret key — the revoke is self-signed by the key it revokes |
+| `--org-public-key` | Yes | The org public key being revoked (written into the body) |
+| `--genesis-event-id` | No | `org_genesis` event_id added as `dependency_refs[94]` (trust-anchor link) |
+| `--revoke-time` | No | Unix seconds when the revocation takes effect (default: now) |
+| `--reason` | No | Audit string (default: `manual`) |
+
+### 2. POST the envelope
 
 ```bash
 curl -X POST https://localhost:30080/events \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $SEAD_AUTH_SECRET" \
-  -d '{"envelope_hex": "<org-key-revoke-envelope>"}'
+  -d "{\"envelope_hex\": \"$(cat org_revoke.hex)\"}"
+
+# Expected response:
+# {"event_id":"<64-hex>","event_type":2,"event_type_name":"org_key_revoke","status":"accepted"}
 ```
+
+After `revoke_time` the org key is **inactive**: `GET /orgs/<org_id>` reports
+`"status":"inactive"` and verifiers reject new tokens/events signed by it.
+
+**Re-enrolling after a rotation.** A fresh `org_genesis` is accepted only once
+no active key exists for the `org_id` (otherwise `ERR_DUPLICATE_ORG`). Two
+rotation cases:
+
+- **New org key (new `org_id`):** the new genesis does not collide — POST it
+  first, then revoke the old key. Zero gap where the org is inactive for pinning.
+- **Same `org_id` (e.g. re-enrolling module endorsements):** revoke first, then
+  POST the new genesis — the duplicate gate passes because the prior key is no
+  longer active.
