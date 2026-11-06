@@ -85,6 +85,36 @@ values — you will need them for configuration and bootstrap.
 > the key material. All tools (`gen-bootstrap`, `gen-token`, `endorse`)
 > expect these hex values, not the label text.
 
+### XMSS key state persistence (org **and** edge keys)
+
+XMSS is a **one-time** signature scheme: every signature burns the leaf index
+embedded in the secret key, and reusing a leaf for two different messages
+breaks the scheme. Both signing keys used by `edge-service` — the **org** key
+(auth/pin tokens) and the **edge** key (`edge_commit` signatures) — therefore
+persist their full signer state (the one-time index **and** the advanced
+secret-key buffer, which carries the tree-authentication state) to the
+`key_index` table in `/data/edge.db` after every signature, before the
+signature is released. After any restart the signers resume from that stored
+state and continue at the next unused leaf.
+
+Consequences for operations:
+
+- **`edge.db` is key material.** The `sead_data` volume holding `edge.db`
+  must be backed up with the same care as the keys themselves.
+- **`docker compose down -v`, or restoring a stale `edge.db` backup, is a
+  key-rotation event** for both the org and the edge key — not a
+  re-provisioning step. If the volume is lost, revoke and re-issue the
+  affected keys (org revocation / edge revocation + new `edge_authorization`)
+  instead of reusing them from a reset index.
+- Deployments that published commits **before** state persistence existed must
+  be seeded or rotated first (the `edge-index-audit` tool in the
+  `stardome-sead-private` repo audits published leaf indices per key and can
+  seed the store; if auditing or seeding is impossible, rotate).
+- Domain split: the private development compose files run with
+  `--fake-signing` (throwaway dev keys, persistence irrelevant); this repo's
+  `docker-compose.remote.yml` signs for real and relies on the persistence
+  described here.
+
 ---
 
 ## Step 2 — Deploy the stack
