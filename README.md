@@ -645,6 +645,15 @@ curl -k https://localhost:30080/health
 Enrollment is complete. From here ordinary `up -d` / `down` cycles work
 normally.
 
+### Key rotation and revocation
+
+To retire a compromised or rotated org key, post an `org_key_revoke` event
+(event_type 2). The envelope is **generated** with the `gen-bootstrap` tool
+(`org-key-revoke` subcommand, signed with the current active org key on a
+secure offline laptop) and then **POSTed** to `/events` — full procedure,
+flags table, and the two rotation orderings (new `org_id`: genesis-then-revoke;
+same `org_id`: revoke-then-genesis) are in
+[docs/bootstrap-genesis.md — Key revocation](docs/bootstrap-genesis.md#key-revocation).
 
 ---
 
