@@ -112,8 +112,9 @@ Consequences for operations:
   seed the store; if auditing or seeding is impossible, rotate).
 - Domain split: the private development compose files run with
   `--fake-signing` (throwaway dev keys, persistence irrelevant); this repo's
-  `docker-compose.remote.yml` signs for real and relies on the persistence
-  described here.
+  production Compose files (`compose.yaml` with `compose.production.yaml`)
+  sign for real and rely on the persistence described here, and so does
+  `compose.development.yaml`, which never adds `--fake-signing`.
 
 ---
 
@@ -123,6 +124,23 @@ Consequences for operations:
 
 - Docker + Docker Compose plugin
 - The key values from Step 1
+
+### Compose files
+
+| File | Use |
+|------|-----|
+| `compose.yaml` | Base file with every service; always combined with one overlay below |
+| `compose.production.yaml` | Overlay that runs the pre-built images from ghcr.io |
+| `compose.development.yaml` | Overlay that builds the images from local source checkouts (`SEAD_SOURCE_DIR`, `SEAD_GATEWAY_SOURCE_DIR`), logs at debug level and publishes the gRPC ports on `127.0.0.1`; it signs with real XMSS keys like production |
+| `compose.relay.yaml` | Standalone file for a relay-only bootstrap peer (gossip-node alone) |
+
+All of them set the project name `stardome-sead`, so the `stardome-sead_sead_data`
+volume, and with it the XMSS key indices in `edge.db`, carry over from earlier
+deployments. `.env.example` sets `COMPOSE_FILE=compose.yaml:compose.production.yaml`,
+so with it copied to `.env` a plain `docker compose up -d` in the clone uses the
+production pair. With a required variable (marked **†** in the
+[configuration reference](#configuration-reference)) unset or empty, every
+`docker compose` command stops before starting anything and names it.
 
 ### Configure
 
@@ -141,6 +159,8 @@ SEAD_AUTH_SECRET=<shared-secret>
 GOSSIP_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
 GOSSIP_OBSERVE_ORGS=<other_org_id_hex>,<another_org_id_hex>
 GOSSIP_BOOTSTRAP=/ip4/<peer-ip>/tcp/31002/p2p/<peerid>
+# This node's reachable multiaddr (required)
+GOSSIP_ADVERTISE=/ip4/<public_ip>/tcp/31002
 EOF
 ```
 
@@ -228,8 +248,8 @@ EOF
 Start the stack:
 
 ```bash
-docker compose -f docker-compose.remote.yml pull
-docker compose -f docker-compose.remote.yml up -d
+docker compose -f compose.yaml -f compose.production.yaml pull
+docker compose -f compose.yaml -f compose.production.yaml up -d
 
 # Verify the gateway is up (TLS on by default; -k for self-signed)
 curl -k https://localhost:30080/health
@@ -296,7 +316,7 @@ curl -k https://localhost:30080/health
 | `GOSSIP_ORG_ID` | gossip-node | **†** | — | Org ID (hex, 64 chars) — same as `EDGE_ORG_ID`; gossip-node's own org (always observed) |
 | `GOSSIP_OBSERVE_ORGS` | gossip-node | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
 | `GOSSIP_BOOTSTRAP` | gossip-node | No | — | Comma-separated libp2p multiaddrs of other nodes to dial at startup (`/ip4/<ip>/tcp/31002/p2p/<peerid>`). A **transport entry point** to join the mesh — not org-specific; any reachable peer works. mDNS/DHT also discover peers |
-| `GOSSIP_ADVERTISE` | gossip-node | No | — | Multiaddr this node advertises to peers (`/ip4/<public_ip>/tcp/31002`). **Required on Internet-facing edges**: without it the node advertises its container IP and every peer dial fails ("no good addresses" / "dial to self") |
+| `GOSSIP_ADVERTISE` | gossip-node, relay | **†** | — | Multiaddr this node advertises to peers (`/ip4/<public_ip>/tcp/31002`). Without it the node advertises its container IP and every peer dial fails ("no good addresses" / "dial to self") |
 | `GOSSIP_IDENTITY_KEY_FILE` | gossip-node | No | `/data/gossip-keys/gossip-identity.key` | Persistent libp2p identity key path. Must be **inside** the mounted `gossip_data` volume dir — a path outside it is not persisted, so the PeerId is regenerated on every recreate and published bootstrap multiaddrs go stale ("peer id mismatch") |
 | `GOSSIP_LISTEN` | gossip-node | No | `/ip4/0.0.0.0/tcp/31002` | gossip-node libp2p listen multiaddr |
 | `GOSSIP_HEARTBEAT_SEC` | gossip-node | No | `10` | Frontier publish interval (seconds) |
@@ -305,7 +325,7 @@ curl -k https://localhost:30080/health
 | `GOSSIP_MDNS` | gossip-node | No | `true` | Enable mDNS LAN peer discovery |
 | `GOSSIP_DHT` | gossip-node | No | `true` | Enable Kademlia DHT peer discovery |
 | `GOSSIP_PNET` | gossip-node | No | `false` | Enable private-network enforcement |
-| `SEAD_AUTH_SECRET` | gateway | **†** | — | Shared secret the gateway requires as `Authorization: Bearer <value>` on its public HTTPS endpoints. It guards the gateway's **public** API (the gRPC calls between the internal C++ services and `gossip-node` do **not** use it). **Empty (`""`) disables auth** — the gateway then accepts any request with no token, which is only safe for a localhost/isolated node; any **non-empty** value becomes a hard, single accepted Bearer (not "any string"). Set it (e.g. `openssl rand -hex 32`) whenever `:30080` could be reached beyond your own host |
+| `SEAD_AUTH_SECRET` | gateway | **†** | — | Shared secret the gateway requires as `Authorization: Bearer <value>` on its public HTTPS endpoints. It guards the gateway's **public** API (the gRPC calls between the internal C++ services and `gossip-node` do **not** use it). The gateway itself treats an empty value as "auth disabled" (any request accepted with no token), but these Compose files reject an empty value, so a node never starts with auth off by mistake; any **non-empty** value becomes a hard, single accepted Bearer (not "any string"). Generate it with e.g. `openssl rand -hex 32` |
 | `GATEWAY_TLS_ENABLED` | gateway | No | `true` | Enable TLS termination (set false to disable) |
 | `GATEWAY_TLS_CERT` / `GATEWAY_TLS_KEY` | gateway | No | `/etc/gateway/certs/server.crt` / `.key` | TLS cert/key paths (mounted from `./secrets`). **Production/cross-org:** use a public cert (Let's Encrypt). **Isolated/own-party deployment:** self-signed is fine (see the gateway README for the distinction) |
 | `GATEWAY_AUTH_CBOR_ENABLED` | gateway | No | `true` | CBOR auth-token verification (collapsed from auth-service) |
@@ -316,6 +336,10 @@ curl -k https://localhost:30080/health
 | `SVC_STORAGE_GRPC` | gateway | No | `storage-gateway:50052` | storage-gateway gRPC target |
 | `SVC_SOURCE_DATA_GRPC` | gateway | No | `source-data-service:50053` | source-data-service gRPC target |
 | `GATEWAY_GRPC_PORT` | gateway | No | `50054` | Gateway Sync gRPC port |
+
+**†** Required: the Compose files read it as `${VAR:?}`, so with it unset or
+empty `docker compose` exits non-zero naming it. `.env.example` holds example
+values for these only so that `docker compose config` resolves; replace them.
 
 > **Gateway config:** the full gateway configuration (TLS, auth, timeouts,
 > gRPC targets) is documented in the
@@ -666,7 +690,7 @@ The org and edge are now enrolled. Start `edge-service` (it auto-resolves the
 stack is healthy:
 
 ```bash
-docker compose -f docker-compose.remote.yml up -d edge-service
+docker compose -f compose.yaml -f compose.production.yaml up -d edge-service
 
 # Expect 4/4 healthy (edge-service now ok)
 curl -k https://localhost:30080/health

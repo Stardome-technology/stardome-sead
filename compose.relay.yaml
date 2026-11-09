@@ -8,9 +8,18 @@
 # nodes join the mesh by dialing its published libp2p multiaddr
 # (`/ip4/<host-ip>/tcp/31002/p2p/<peerid>`).
 #
-# Usage: docker compose -f docker-compose.relay.yml up -d
-# Get the PeerId: docker compose -f docker-compose.relay.yml logs gossip-node | grep "peer ID"
+# Usage: docker compose -f compose.relay.yaml up -d
+# Get the PeerId: docker compose -f compose.relay.yaml logs gossip-node | grep "peer ID"
 # Persistent identity keeps the PeerId stable across restarts.
+#
+# This file stands alone: it takes no overlay. Required variables use
+# `${VAR:?}`: with one unset or empty, `docker compose` stops and names it.
+#
+# The project name is pinned to `stardome-sead`, the name Compose derived from
+# the clone's directory before this file existed, so a running relay is
+# recreated in place instead of left behind by a renamed project.
+
+name: stardome-sead
 
 services:
   gossip-node:
@@ -44,17 +53,18 @@ services:
       # Externally reachable multiaddr to advertise in place of the container-
       # internal host.Addrs() (e.g. the bat0 mesh IP). Set on the relay to
       # /ip4/192.168.60.4/tcp/31002 so peers redial a routable address
-      # after a mesh flap. Empty = advertise observed addrs unchanged.
-      - GOSSIP_ADVERTISE=${GOSSIP_ADVERTISE:-}
+      # after a mesh flap. Required: the relay is the bootstrap anchor, and an
+      # anchor that advertises its container IP is unreachable.
+      - GOSSIP_ADVERTISE=${GOSSIP_ADVERTISE:?}
       - GOSSIP_BOOTSTRAP=${GOSSIP_BOOTSTRAP:-}
       - GOSSIP_MDNS=${GOSSIP_MDNS:-true}
       - GOSSIP_DHT=${GOSSIP_DHT:-true}
       - GOSSIP_PNET=${GOSSIP_PNET:-false}
       - GOSSIP_IDENTITY_KEY_FILE=${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}
-    # Entrypoint override: see docker-compose.remote.yml gossip-node. The image's
+    # Entrypoint override: see compose.yaml gossip-node. The image's
     # ENTRYPOINT is "gossip-node", so the `command` wrapper must run via sh -c.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ -n \"${GOSSIP_ADVERTISE}\" ] && ARGS=\"$$ARGS --advertise ${GOSSIP_ADVERTISE}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
+    command: ["ARGS=\"--listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_BOOTSTRAP:-}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP:-}\"; [ -n \"${GOSSIP_ADVERTISE:?}\" ] && ARGS=\"$$ARGS --advertise ${GOSSIP_ADVERTISE:?}\"; [ \"${GOSSIP_PNET:-false}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
     restart: unless-stopped
 
 networks:

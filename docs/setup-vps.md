@@ -144,8 +144,8 @@ SEAD_AUTH_SECRET=<shared-secret>         # required in production
 ### 3.2 Start
 
 ```bash
-docker compose -f docker-compose.remote.yml pull
-docker compose -f docker-compose.remote.yml up -d
+docker compose -f compose.yaml -f compose.production.yaml pull
+docker compose -f compose.yaml -f compose.production.yaml up -d
 
 # Verify the gateway is healthy
 curl -k https://localhost:30080/health
@@ -157,11 +157,12 @@ curl -k https://localhost:30080/health
 
 Deploy the Explorer on the same VPS (see
 [stardome-sead-explorer](https://github.com/Stardome-technology/stardome-sead-explorer)).
+In the Explorer's clone, pull and start its remote Compose file as its README
+describes, then check it:
 
 ```bash
 docker network create sead-network 2>/dev/null || true
-docker compose -f docker-compose.remote.yml pull
-docker compose -f docker-compose.remote.yml up -d
+# pull and up -d with the Explorer's own Compose file, from its clone
 
 curl http://127.0.0.1:8086/health
 curl http://127.0.0.1:3000/
@@ -188,7 +189,7 @@ OBSERVER_NODE_ID=<observer_node_id_hex>
 
 ## 5. gossip-node (sync observer)
 
-`gossip-node` is included in the SEAD stack compose (`docker-compose.remote.yml`)
+`gossip-node` is included in the SEAD stack compose (`compose.yaml`)
 and starts automatically. It runs its own libp2p peer on `31002` and
 publishes/subscribes frontiers on `sead-sync/{org}` topics. `31002` is published on
 the host so other nodes can dial this peer.

@@ -1,5 +1,21 @@
-# Remote compose file — pulls pre-built images from ghcr.io instead of building.
-# Usage: docker compose -f docker-compose.remote.yml up -d
+# Base Compose file for a SEAD node. It is never used alone: combine it with
+# exactly one overlay.
+#
+#   Production (pre-built images from ghcr.io):
+#     docker compose -f compose.yaml -f compose.production.yaml up -d
+#   Development (local builds, debug logs, gRPC ports on localhost):
+#     docker compose -f compose.yaml -f compose.development.yaml up -d
+#
+# `.env.example` sets COMPOSE_FILE to the production pair, so with it copied to
+# `.env` a plain `docker compose up -d` in this directory uses production.
+#
+# Required variables use `${VAR:?}`: with one unset or empty, `docker compose`
+# stops before doing anything and names it.
+#
+# The project name is pinned to `stardome-sead`, the name Compose derived from
+# the clone's directory before this file existed. Changing it orphans the
+# `stardome-sead_sead_data` volume, which holds the XMSS key indices in
+# `edge.db`: a new volume resets them and forces a key rotation.
 #
 # Go Gateway migration (phase 4.4): the C++ services (sead-core, edge-service,
 # pin-service, source-data-service, sead-sync) are gRPC-only and publish no
@@ -9,9 +25,10 @@
 # collapsed into the gateway (no longer standalone services). pin-service is the
 # sole storage authority (AddToIPFS/RetrieveFromIPFS/ResolveCIDByPayloadHash).
 
+name: stardome-sead
+
 services:
   sead-core:
-    image: ghcr.io/stardome-technology/stardome-sead/sead-core:latest
     restart: unless-stopped
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
@@ -29,17 +46,16 @@ services:
       - sead-network
 
   edge-service:
-    image: ghcr.io/stardome-technology/stardome-sead/edge-service:latest
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=edge-service
-      - EDGE_ORG_ID=${EDGE_ORG_ID:-}
-      - EDGE_ID=${EDGE_ID:-}
-      - EDGE_SIGNING_KEY=${EDGE_SIGNING_KEY:-}
-      - EDGE_ORG_SIGNING_KEY=${EDGE_ORG_SIGNING_KEY:-}
+      - EDGE_ORG_ID=${EDGE_ORG_ID:?}
+      - EDGE_ID=${EDGE_ID:?}
+      - EDGE_SIGNING_KEY=${EDGE_SIGNING_KEY:?}
+      - EDGE_ORG_SIGNING_KEY=${EDGE_ORG_SIGNING_KEY:?}
       - EDGE_ORG_PUBLIC_KEY=${EDGE_ORG_PUBLIC_KEY:-}
       - EDGE_TOKEN_TTL=${EDGE_TOKEN_TTL:-300}
       - EDGE_PIN_SERVICE_URL=${EDGE_PIN_SERVICE_URL:-pin-service:50056}
@@ -53,11 +69,11 @@ services:
       # Optional — auto-resolved from sead-core at startup if unset; set to override
       - EDGE_AUTHORIZATION_EVENT_ID=${EDGE_AUTHORIZATION_EVENT_ID:-}
     command: ["edge-service", "--port", "50055", "--db", "/data/edge.db",
-              "--org-id", "${EDGE_ORG_ID:-}",
-              "--edge-id", "${EDGE_ID:-}",
-              "--signing-key", "${EDGE_SIGNING_KEY}",
-              "--org-signing-key", "${EDGE_ORG_SIGNING_KEY}",
-              "--org-public-key", "${EDGE_ORG_PUBLIC_KEY}",
+              "--org-id", "${EDGE_ORG_ID:?}",
+              "--edge-id", "${EDGE_ID:?}",
+              "--signing-key", "${EDGE_SIGNING_KEY:?}",
+              "--org-signing-key", "${EDGE_ORG_SIGNING_KEY:?}",
+              "--org-public-key", "${EDGE_ORG_PUBLIC_KEY:-}",
               "--token-ttl", "${EDGE_TOKEN_TTL:-300}",
               "--pin-service-url", "${EDGE_PIN_SERVICE_URL:-pin-service:50056}",
               "--sead-core-url", "sead-core:50051",
@@ -68,7 +84,7 @@ services:
               "--pin-max-retries", "${EDGE_PIN_MAX_RETRIES:--1}",
               "--pin-backoff-base", "${EDGE_PIN_BACKOFF_BASE_SEC:-30}",
               "--pin-backoff-cap", "${EDGE_PIN_BACKOFF_CAP_SEC:-86400}",
-              "--edge-authorization-event-id", "${EDGE_AUTHORIZATION_EVENT_ID}"]
+              "--edge-authorization-event-id", "${EDGE_AUTHORIZATION_EVENT_ID:-}"]
     depends_on:
       sead-core:
         condition: service_healthy
@@ -83,7 +99,6 @@ services:
       - sead-network
 
   pin-service:
-    image: ghcr.io/stardome-technology/stardome-sead/pin-service:latest
     # No public ports — gRPC-only, sole storage authority (AddToIPFS,
     # RetrieveFromIPFS, ResolveCIDByPayloadHash); reachable on sead-network.
     volumes:
@@ -104,7 +119,6 @@ services:
       - sead-network
 
   source-data-service:
-    image: ghcr.io/stardome-technology/stardome-sead/source-data-service:latest
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
@@ -123,7 +137,6 @@ services:
       - sead-network
 
   gossip-node:
-    image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
     # Option A (C2): own libp2p peer per node.
     # - On the sead-network bridge so it reaches sead-core/gateway by name.
     # - Publish the libp2p TCP port so other POCs reach this peer at the node's
@@ -152,14 +165,16 @@ services:
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=gossip-node
-      - GOSSIP_ORG_ID=${GOSSIP_ORG_ID:-}
+      - GOSSIP_ORG_ID=${GOSSIP_ORG_ID:?}
       - GOSSIP_OBSERVE_ORGS=${GOSSIP_OBSERVE_ORGS:-}
       - GOSSIP_LISTEN=${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002}
       # Externally reachable multiaddr to advertise in place of the container-
       # internal host.Addrs() (e.g. the bat0 mesh IP). Set per POC to
       # /ip4/192.168.60.<n>/tcp/31002 so peers redial a routable address
-      # after a mesh flap. Empty = advertise observed addrs unchanged.
-      - GOSSIP_ADVERTISE=${GOSSIP_ADVERTISE:-}
+      # after a mesh flap. Required: an Internet-facing node that advertises
+      # its container IP gets "no good addresses" / "dial to self" on every
+      # inbound dial.
+      - GOSSIP_ADVERTISE=${GOSSIP_ADVERTISE:?}
       - GOSSIP_BOOTSTRAP=${GOSSIP_BOOTSTRAP:-}
       - GOSSIP_HEARTBEAT_SEC=${GOSSIP_HEARTBEAT_SEC:-10}
       - GOSSIP_CORE=${GOSSIP_CORE:-sead-core:50051}
@@ -175,7 +190,7 @@ services:
     # at the first non-flag arg ("sh"), and the binary boots with defaults
     # (relay-only + port 9001), never receiving --own-org/--orgs/--listen.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ARGS=\"--own-org ${GOSSIP_ORG_ID:-} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --edge ${GOSSIP_EDGE:-edge-service:50055} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_OBSERVE_ORGS}\" ] && ARGS=\"$$ARGS --orgs ${GOSSIP_OBSERVE_ORGS}\"; [ -n \"${GOSSIP_BOOTSTRAP}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP}\"; [ -n \"${GOSSIP_ADVERTISE}\" ] && ARGS=\"$$ARGS --advertise ${GOSSIP_ADVERTISE}\"; [ \"${GOSSIP_PNET}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
+    command: ["ARGS=\"--own-org ${GOSSIP_ORG_ID:?} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --edge ${GOSSIP_EDGE:-edge-service:50055} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_OBSERVE_ORGS:-}\" ] && ARGS=\"$$ARGS --orgs ${GOSSIP_OBSERVE_ORGS:-}\"; [ -n \"${GOSSIP_BOOTSTRAP:-}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP:-}\"; [ -n \"${GOSSIP_ADVERTISE:?}\" ] && ARGS=\"$$ARGS --advertise ${GOSSIP_ADVERTISE:?}\"; [ \"${GOSSIP_PNET:-false}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
     depends_on:
       gateway:
         condition: service_healthy
@@ -184,7 +199,6 @@ services:
       - sead-network
 
   gateway:
-    image: ghcr.io/stardome-technology/stardome-sead-gateway:latest
     ports:
       - "30080:30080"
     volumes:
@@ -195,7 +209,7 @@ services:
       - GATEWAY_TLS_CERT=${GATEWAY_TLS_CERT:-/etc/gateway/certs/server.crt}
       - GATEWAY_TLS_KEY=${GATEWAY_TLS_KEY:-/etc/gateway/certs/server.key}
       - GATEWAY_AUTH_ENABLED=${GATEWAY_AUTH_ENABLED:-true}
-      - SEAD_AUTH_SECRET=${SEAD_AUTH_SECRET:-}
+      - SEAD_AUTH_SECRET=${SEAD_AUTH_SECRET:?}
       - GATEWAY_EDGE_TOKENS=${GATEWAY_EDGE_TOKENS:-}
       - GATEWAY_AUTH_CBOR_ENABLED=${GATEWAY_AUTH_CBOR_ENABLED:-true}
       # Key resolution uses the SVC_SEAD_CORE_GRPC gRPC target
