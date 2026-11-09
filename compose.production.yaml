@@ -1,0 +1,26 @@
+# Production overlay for compose.yaml: runs the pre-built images from ghcr.io.
+# Usage:
+#   docker compose -f compose.yaml -f compose.production.yaml pull
+#   docker compose -f compose.yaml -f compose.production.yaml up -d
+#
+# edge-service signs with real XMSS keys and relies on the key indices stored in
+# `edge.db` (see the README, "XMSS key-state persistence").
+
+services:
+  sead-core:
+    image: ghcr.io/stardome-technology/stardome-sead/sead-core:latest
+
+  edge-service:
+    image: ghcr.io/stardome-technology/stardome-sead/edge-service:latest
+
+  pin-service:
+    image: ghcr.io/stardome-technology/stardome-sead/pin-service:latest
+
+  source-data-service:
+    image: ghcr.io/stardome-technology/stardome-sead/source-data-service:latest
+
+  gossip-node:
+    image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
+
+  gateway:
+    image: ghcr.io/stardome-technology/stardome-sead-gateway:latest

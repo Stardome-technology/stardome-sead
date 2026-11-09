@@ -1,0 +1,72 @@
+# Development overlay for compose.yaml: builds the images from local source
+# checkouts, logs at debug level, and publishes each service's gRPC port on
+# localhost for debugging tools such as grpcurl.
+# Usage:
+#   docker compose -f compose.yaml -f compose.development.yaml up -d --build
+#
+# Set SEAD_SOURCE_DIR to a checkout of the SEAD services' source and
+# SEAD_GATEWAY_SOURCE_DIR to a checkout of the gateway's source, as absolute
+# paths or relative to this directory.
+#
+# This overlay changes how images are built, how much the services log and which
+# ports they publish, never how they sign: edge-service signs with real XMSS
+# keys here too, since sead-core rejects fake-signed edge commits at ingest.
+
+services:
+  sead-core:
+    build:
+      context: ${SEAD_SOURCE_DIR:?}
+      dockerfile: docker/Dockerfile
+    image: sead-core:dev
+    environment:
+      LOG_LEVEL: debug
+    ports:
+      - "127.0.0.1:50051:50051"
+
+  edge-service:
+    build:
+      context: ${SEAD_SOURCE_DIR:?}
+      dockerfile: docker/Dockerfile
+    image: edge-service:dev
+    environment:
+      LOG_LEVEL: debug
+    ports:
+      - "127.0.0.1:50055:50055"
+
+  pin-service:
+    build:
+      context: ${SEAD_SOURCE_DIR:?}/tools/pin-service
+      dockerfile: Dockerfile
+    image: pin-service:dev
+    environment:
+      LOG_LEVEL: debug
+    ports:
+      - "127.0.0.1:50056:50056"
+
+  source-data-service:
+    build:
+      context: ${SEAD_SOURCE_DIR:?}
+      dockerfile: docker/Dockerfile
+    image: source-data-service:dev
+    environment:
+      LOG_LEVEL: debug
+    ports:
+      - "127.0.0.1:50053:50053"
+
+  gossip-node:
+    build:
+      context: ${SEAD_SOURCE_DIR:?}/tools/sead-gossip-node
+      dockerfile: Dockerfile
+    image: gossip-node:dev
+    environment:
+      LOG_LEVEL: debug
+
+  gateway:
+    build:
+      context: ${SEAD_GATEWAY_SOURCE_DIR:?}
+      dockerfile: Dockerfile
+    image: stardome-sead-gateway:dev
+    environment:
+      GATEWAY_LOG_LEVEL: debug
+    ports:
+      - "127.0.0.1:50054:50054"
