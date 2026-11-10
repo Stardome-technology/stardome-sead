@@ -25,11 +25,11 @@ before the auth stack can verify tokens. This is a one-time operational step.
   # Build the keygen tool
   cmake -B build -DBUILD_TOOLS=ON && cmake --build build -j
   
-  # Generate an organization keypair (default: XMSS-SHAKE_20_256)
-  ./build/tools/keygen --label my-org --oid 0x09
+  # Generate an organization keypair (XMSS-SHAKE256_20_256 — DAG signing scheme)
+  ./build/tools/keygen --label my-org --oid 0x12
   
   # Generate an edge keypair
-  ./build/tools/keygen --label my-edge --oid 0x09
+  ./build/tools/keygen --label my-edge --oid 0x12
   ```
   Copy the `SECRET_KEY`, `PUBLIC_KEY`, and `ID` values into your `.env` file.
 
