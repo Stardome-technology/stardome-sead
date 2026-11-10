@@ -16,5 +16,6 @@
 
 ## 4. Quality gate
 
-- [ ] 4.1 `openspec validate add-org-key-rotation-guide` passes.
+- [x] 4.1 `openspec validate add-org-key-rotation-guide` passes.
+  <!-- evidence 2026-11-10 nicola bench: `npx -y @fission-ai/openspec@1.17.0 validate add-org-key-rotation-guide` on 628b637 -> "Change 'add-org-key-rotation-guide' is valid", exit 0 (INFO: skip_specs in .openspec.yaml, zero deltas accepted) -->
 - [ ] 4.2 Commit on `feat/add-org-key-rotation-guide`, push, open MR.
