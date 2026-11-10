@@ -406,3 +406,7 @@ rotation cases:
 - **Same `org_id` (e.g. re-enrolling module endorsements):** revoke first, then
   POST the new genesis — the duplicate gate passes because the prior key is no
   longer active.
+
+For the full end-to-end rotation procedure — generating the new XMSS keypair,
+publishing it, and retiring the old key across a live federation — see the
+[Organization Key Rotation Guide](org-key-rotation.md).
