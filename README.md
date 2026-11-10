@@ -66,15 +66,22 @@ transmit it over the network.
 docker pull ghcr.io/stardome-technology/stardome-sead/keygen:latest
 
 # Generate an organization keypair (used for auth tokens)
-docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label org
+# --oid 0x12 = XMSS-SHAKE256_20_256 — the DAG signing scheme (tool default)
+docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label org --oid 0x12
 
 # Generate an edge DAG signing keypair
 # (separate from the org key — edge signs commits, org signs tokens)
-docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label edge
+docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --label edge --oid 0x12
 
 # See all supported OIDs and options
 docker run --rm ghcr.io/stardome-technology/stardome-sead/keygen --help
 ```
+
+> **OID:** software DAG keys (org + edge) must use **`0x12`**
+> (`XMSS-SHAKE256_20_256`, the default). `0x05` (`XMSSMT-SHA2_40/8_256`) exists
+> only for hardware-attestation compatibility and is produced by the modules
+> themselves — never use it for org/edge keys. Keys with any other OID are
+> rejected by sead-core.
 
 Each run prints `ID`, `SECRET_KEY`, and `PUBLIC_KEY` in hex. Save these
 values — you will need them for configuration and bootstrap.
