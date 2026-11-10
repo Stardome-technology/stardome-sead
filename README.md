@@ -359,6 +359,18 @@ Before the DAG accepts events, register your organization and authorize
 your edge. The easiest way is using the `gen-bootstrap` tool, which
 builds and signs the CBOR envelopes for you.
 
+> **⚠️ Pass `--key-index-db` on every `gen-bootstrap` signing command for one
+> org key.** XMSS is one-time: `org-genesis` and `edge-authorization` are two
+> signatures under the same org key and **must** use distinct leaf indices.
+> Point every signing command (`org-genesis`, `edge-authorization`,
+> `org-key-revoke`) at the **same** `--key-index-db /data/org-key-index.db`
+> file (inside a mounted directory) and run them **serialized** — the store
+> advances the leaf index across runs (0, 1, …). Running the commands without
+> a shared store signs both at leaf 0 and **permanently compromises the org
+> key** (WOTS+ leaf reuse). After enrolling, seed that DB into the edge as its
+> initial `edge.db` — see
+> [docs/bootstrap-genesis.md — Seed the org key index](docs/bootstrap-genesis.md#seed-the-org-key-index-into-edge-service-bootstrap--seed--first-start).
+
 ### 3a — Generate the module endorsement signature
 
 The OrgGenesis event requires a **module endorsement signature**: an XMSS
@@ -483,7 +495,8 @@ docker run --rm -v "$(pwd):/data" \
   --org-public-key <org_public_key_hex> \
   --attestation-file /data/endorse_att.bin \
   --not-before <unix_epoch_sec> \
-  --not-after <unix_epoch_sec>
+  --not-after <unix_epoch_sec> \
+  --key-index-db /data/org-key-index.db
 ```
 
 > **Important:** Docker only sees files inside mounted volumes. The
@@ -505,7 +518,8 @@ and XMSS signature from the attestation CBOR binary, and derives the
 Alternatively, you can pass individual module arguments (legacy):
 
 ```bash
-docker run --rm ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-genesis \
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-genesis \
   --org-id <org_id_hex> \
   --org-signing-key <org_secret_key_hex> \
   --org-public-key <org_public_key_hex> \
@@ -514,7 +528,8 @@ docker run --rm ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-gene
   --module-merkle-root <merkle_root_hex> \
   --module-signature <sig_hex> \
   --not-before <unix_epoch_sec> \
-  --not-after <unix_epoch_sec>
+  --not-after <unix_epoch_sec> \
+  --key-index-db /data/org-key-index.db
 ```
 
 The `--not-before` and `--not-after` values **must** match exactly what
@@ -535,6 +550,7 @@ docker run --rm -v "$(pwd):/data" \
   --attestation-file /data/endorse_att.bin \
   --not-before <unix_epoch_sec> \
   --not-after <unix_epoch_sec> \
+  --key-index-db /data/org-key-index.db \
   --out-file /data/envelope.hex
 
 # POST the file contents as the JSON value
@@ -599,6 +615,7 @@ docker run --rm -v "$(pwd):/data" \
   --edge-pk <edge_pk_hex> \
   --not-before <unix_epoch_sec> \
   --not-after <unix_epoch_sec> \
+  --key-index-db /data/org-key-index.db \
   --out-file /data/envelope.hex
 ```
 
@@ -685,7 +702,14 @@ curl $CURL_TLS https://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
 
 ### 3d — Bring up edge-service
 
-The org and edge are now enrolled. Start `edge-service` (it auto-resolves the
+The org and edge are now enrolled. **Before the first start, seed the org key
+index**: copy the `org-key-index.db` produced in 3b/3c to the edge's data
+volume as its initial `edge.db` (fresh edge — plain `cp`; merge into an
+existing `edge.db` via `edge-index-audit --seed`). The org signer then
+resumes at leaf ≥ 2 instead of reusing the bootstrap leaves. Full procedure:
+[docs/bootstrap-genesis.md — Seed the org key index](docs/bootstrap-genesis.md#seed-the-org-key-index-into-edge-service-bootstrap--seed--first-start).
+
+Start `edge-service` (it auto-resolves the
 `edge_authorization` event_id from sead-core at startup) and confirm the whole
 stack is healthy:
 

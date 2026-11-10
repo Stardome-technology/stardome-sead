@@ -9,7 +9,8 @@ before the auth stack can verify tokens. This is a one-time operational step.
 > POST these events). The gateway therefore does **not** wait on edge-service.
 > On a fresh node (after `down -v` or a new deploy) a full `docker compose up -d`
 > leaves **edge-service exited — expected**. Complete Step 1 (org-genesis) and
-> Step 2 (edge-authorization) below, then start it:
+> Step 2 (edge-authorization) below, seed the key-index DB as the initial
+> `edge.db` (see "Seed the org key index into edge-service"), then start it:
 > ```bash
 > docker compose -f <compose-file> up -d edge-service
 > ```
@@ -202,6 +203,88 @@ The body inside the envelope is equivalent to this JSON structure:
   "not_after": <0 or timestamp>
 }
 ```
+
+## Seed the org key index into edge-service (bootstrap → seed → first start)
+
+`gen-bootstrap` accepts `--key-index-db <path>` on every org-key signing
+subcommand (`org-genesis`, `edge-authorization`, `edge-revocation`,
+`org-key-revoke`): a SQLite file persisting the org key's XMSS signer state
+`{index, sk}` across runs — the same `key_index` table edge-service uses in
+its `edge.db`. This file is the bridge between the offline bootstrap runs and
+the edge: it is created before any edge exists, then handed to the edge as its
+initial `edge.db`.
+
+### 1. Bootstrap with a shared `--key-index-db`
+
+Pass the **same** `--key-index-db` path to every `gen-bootstrap` run for one
+org key, and run them **serialized** — org-genesis, then edge-authorization,
+then any revocation. Concurrent runs sharing one key can reuse a leaf;
+parallelism across *different* keys is safe.
+
+```bash
+# Step 1 (org-genesis): signs at leaf 0 and persists the advanced state.
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap org-genesis \
+  <same args as Step 1> \
+  --key-index-db /data/org-key-index.db
+
+# Step 2 (edge-authorization): resumes from the DB, signs at leaf 1.
+docker run --rm -v "$(pwd):/data" \
+  ghcr.io/stardome-technology/stardome-sead/gen-bootstrap edge-authorization \
+  <same args as Step 2> \
+  --key-index-db /data/org-key-index.db
+```
+
+A run **without** `--key-index-db` behaves as before (leaf index taken from the
+SK hex) but prints a stderr warning naming the index used: signing more than
+one message with the same key without a store reuses a WOTS+ one-time leaf and
+leaks the key.
+
+### 2. Seed: hand the index DB to the edge
+
+**Fresh edge (no `edge.db` yet):** after the last `gen-bootstrap` run has
+exited, copy the bootstrap DB to the edge's data volume as the initial
+`edge.db`, before the first edge-service start:
+
+```bash
+cp org-key-index.db <edge-data-dir>/edge.db
+```
+
+A plain file copy is the whole handoff — the copied `key_index` row **is** the
+initial index state, edge-service creates its own tables alongside it, and no
+`edge-index-audit --seed` run is needed for the copy case.
+
+**Merge into an existing `edge.db`:** use the `edge-index-audit --seed` rules:
+
+```bash
+./build/tools/edge-index-audit --sead-db <sead.db> \
+  --edge-signing-key-file <edge_sk_file> \
+  --edge-db <edge.db> --seed            # add --dry-run to preview the SQL
+```
+
+The default path **refuses** to touch an existing `key_index` row (it reports
+the existing index and writes nothing) — a default merge therefore never
+lowers, nor alters at all, an existing index. `--force` is a human override
+that overwrites unconditionally: treat it as a recovery tool for moving an
+index **up** only, never script it against live signer state.
+
+### 3. First edge-service start
+
+Start edge-service with `--db` pointing at the seeded `edge.db` (compose:
+`--db /data/edge.db`). Both signers open the same store:
+
+- The **org signer** resumes from the seeded row: after org-genesis (leaf 0)
+  and edge-authorization (leaf 1), the first signatures edge-service produces
+  with the org key — the per-pin tokens in its commit flow — land at
+  leaf >= 2.
+- The **edge key** gets its own `key_index` row, created when edge-service
+  first signs a catalog commit (leaf 0 of the edge key).
+
+> **The rotation rule on state loss is UNCHANGED by index persistence.** Losing
+> or rolling back persisted index state (volume destroyed by `down -v`, a stale
+> `edge.db` restored, the key moved to a new deployment) remains a key-rotation
+> event: revoke and replace the key — never resume signing from a reset index.
+> See the rotation cases under **Key revocation** below.
 
 ## Step 3: Generate a token for IPFS pinning
 
