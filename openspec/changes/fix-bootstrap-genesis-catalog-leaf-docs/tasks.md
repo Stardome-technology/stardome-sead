@@ -7,5 +7,5 @@
 
 ## 2. Quality gate
 
-- [ ] 2.1 `openspec validate fix-bootstrap-genesis-catalog-leaf-docs` passes.
-- [ ] 2.2 Commit on `feat/fix-bootstrap-genesis-catalog-leaf-docs`, push, open PR.
+- [x] 2.1 `openspec validate fix-bootstrap-genesis-catalog-leaf-docs` passes.
+- [x] 2.2 Commit on `feat/fix-bootstrap-genesis-catalog-leaf-docs`, push, open PR.
