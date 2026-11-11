@@ -284,11 +284,23 @@ Start edge-service with `--db` pointing at the seeded `edge.db` (compose:
 `--db /data/edge.db`). Both signers open the same store:
 
 - The **org signer** resumes from the seeded row: after org-genesis (leaf 0)
-  and edge-authorization (leaf 1), the first signatures edge-service produces
-  with the org key — the per-pin tokens in its commit flow — land at
-  leaf >= 2.
+  and edge-authorization (leaf 1), the first org-key signature edge-service
+  produces lands at leaf >= 2 — it is the `replication_endpoint_catalog`
+  (event_type 60, authored via `PostCatalog`) when gossip-node runs,
+  otherwise the first per-pin token in the commit flow.
 - The **edge key** gets its own `key_index` row, created when edge-service
   first signs a catalog commit (leaf 0 of the edge key).
+
+> **Org-key leaf consumption in edge-service.** edge-service consumes org-key
+> leaves in exactly two places: the `replication_endpoint_catalog`
+> (event_type 60, authored via `PostCatalog`) and the per-pin auth tokens in
+> the commit flow. `PostCatalog` runs its gates **before** signing — foreign
+> org → `ERR_ORG_MISMATCH`; inactive/unknown org (`KeyResolver` resolve →
+> nullopt, cached 60 s) → `ERR_ORG_NOT_ACTIVE` — then **signs** (advancing and
+> persisting the key index) and only then calls `post_event`. Caveat: any
+> failure **after** signing (transport error or acceptance rejection from
+> `post_event`) burns one leaf per retry — the pre-sign gates bound the common
+> polling case (node not yet enrolled), not every case.
 
 > **The rotation rule on state loss is UNCHANGED by index persistence.** Losing
 > or rolling back persisted index state (volume destroyed by `down -v`, a stale
