@@ -1,6 +1,8 @@
 # Runtime env (user-specific, not committed)
 .env
 secrets/
+# edge-service key files, when kept in the clone as .env.example suggests
+keys/
 
 # Build-only env (never committed)
 .env.build
