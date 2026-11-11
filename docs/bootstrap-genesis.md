@@ -284,9 +284,10 @@ Start edge-service with `--db` pointing at the seeded `edge.db` (compose:
 `--db /data/edge.db`). Both signers open the same store:
 
 - The **org signer** resumes from the seeded row: after org-genesis (leaf 0)
-  and edge-authorization (leaf 1), the first signatures edge-service produces
-  with the org key — the per-pin tokens in its commit flow — land at
-  leaf >= 2.
+  and edge-authorization (leaf 1), the first org-key signature edge-service
+  produces lands at leaf >= 2 — it is the `replication_endpoint_catalog`
+  (event_type 60, authored via `PostCatalog`) when gossip-node runs,
+  otherwise the first per-pin token in the commit flow.
 - The **edge key** gets its own `key_index` row, created when edge-service
   first signs a catalog commit (leaf 0 of the edge key).
 
