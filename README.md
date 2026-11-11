@@ -713,7 +713,10 @@ The org and edge are now enrolled. **Before the first start, seed the org key
 index**: copy the `org-key-index.db` produced in 3b/3c to the edge's data
 volume as its initial `edge.db` (fresh edge — plain `cp`; merge into an
 existing `edge.db` via `edge-index-audit --seed`). The org signer then
-resumes at leaf ≥ 2 instead of reusing the bootstrap leaves. Full procedure:
+resumes at leaf ≥ 2 instead of reusing the bootstrap leaves. In the merge case
+`--seed` applies only to the **edge** key's own row (it derives the index from
+`edge_commit` events in `sead.db`) and by default refuses to alter an existing
+`key_index` row. Full procedure:
 [docs/bootstrap-genesis.md — Seed the org key index](docs/bootstrap-genesis.md#seed-the-org-key-index-into-edge-service-bootstrap--seed--first-start).
 
 Start `edge-service` (it auto-resolves the

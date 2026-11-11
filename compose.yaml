@@ -52,6 +52,28 @@ services:
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=edge-service
+      # ── Identity vars — org key rotation ─────────────────────────────────
+      # These are the identity vars consumed by edge-service and gossip-node
+      # below. On an org key rotation (docs/org-key-rotation.md) these change:
+      #   EDGE_ORG_SIGNING_KEY / EDGE_ORG_PUBLIC_KEY  new org XMSS keypair
+      #   EDGE_ORG_ID            unchanged for a same-org_id rotation; new id
+      #                          only in the distinct-org variant
+      #   EDGE_ID / EDGE_SIGNING_KEY  only if the edge key is rotated too
+      #   GOSSIP_ORG_ID / GOSSIP_OBSERVE_ORGS  same rule as EDGE_ORG_ID
+      #   GOSSIP_BOOTSTRAP     unchanged (transport PeerIDs are not org identity)
+      # After updating `.env`:
+      #   * Recreate the WHOLE stack (`docker compose up -d` from this
+      #     directory) — do NOT recreate edge-service alone. gossip-node must
+      #     be RECREATED, not merely `restart`ed: `restart` keeps the OLD env,
+      #     and a gossip-node left on the old GOSSIP_ORG_ID/GOSSIP_OBSERVE_ORGS
+      #     silently stops cross-edge replication of the new org's events with
+      #     no error surfaced.
+      #   * Stagger gossip recreation across nodes by ~15 s (longer than one
+      #     GOSSIP_HEARTBEAT_SEC=10): recreate node A's gossip-node, wait 15 s,
+      #     then node B's — recreating both ends close together leaves the
+      #     second dialer stuck in libp2p dial backoff (`topic peers=0`, mesh
+      #     silently stops sharing frontiers). Verify `topic peers>0` on both.
+      # ──────────────────────────────────────────────────────────────────────
       - EDGE_ORG_ID=${EDGE_ORG_ID:?}
       - EDGE_ID=${EDGE_ID:?}
       - EDGE_SIGNING_KEY=${EDGE_SIGNING_KEY:?}
@@ -165,6 +187,10 @@ services:
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=gossip-node
+      # GOSSIP_ORG_ID / GOSSIP_OBSERVE_ORGS / GOSSIP_BOOTSTRAP are
+      # rotation-affected — see the identity comment block in edge-service
+      # above and docs/org-key-rotation.md §5–7 (recreate, don't restart;
+      # stagger ~15 s across nodes).
       - GOSSIP_ORG_ID=${GOSSIP_ORG_ID:?}
       - GOSSIP_OBSERVE_ORGS=${GOSSIP_OBSERVE_ORGS:-}
       - GOSSIP_LISTEN=${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002}

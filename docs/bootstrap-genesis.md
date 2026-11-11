@@ -262,6 +262,16 @@ initial index state, edge-service creates its own tables alongside it, and no
   --edge-db <edge.db> --seed            # add --dry-run to preview the SQL
 ```
 
+> ⚠️ **`edge-index-audit --seed` audits EDGE keys only — never use it to seed
+> the ORG key from this bootstrap handoff.** The audit derives an index from
+> the `edge_commit` events observed in `sead.db` for the key it scans. An org
+> key never signs `edge_commit`s, so its consumed leaves (org-genesis @ leaf 0,
+> edge-authorization @ leaf 1) are invisible to the scan and `--seed` would
+> seed the org row at **idx=1 → leaf 1** — a WOTS+ one-time-key **reuse** of
+> the leaf already signed by `edge-authorization` (full key compromise). The
+> org-key handoff is the copy above; this command seeds the **edge** key's own
+> row only.
+
 The default path **refuses** to touch an existing `key_index` row (it reports
 the existing index and writes nothing) — a default merge therefore never
 lowers, nor alters at all, an existing index. `--force` is a human override
@@ -406,3 +416,7 @@ rotation cases:
 - **Same `org_id` (e.g. re-enrolling module endorsements):** revoke first, then
   POST the new genesis — the duplicate gate passes because the prior key is no
   longer active.
+
+For the full end-to-end rotation procedure — generating the new XMSS keypair,
+publishing it, and retiring the old key across a live federation — see the
+[Organization Key Rotation Guide](org-key-rotation.md).
