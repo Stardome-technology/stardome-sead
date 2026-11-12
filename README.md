@@ -311,6 +311,35 @@ environment, so `docker inspect` of edge-service shows none.
 > signature-verification path. Genuinely invalid events are rejected and
 > dropped, never retried.
 
+### Container hardening
+
+`compose.production.yaml` hardens every service:
+
+- `cap_drop: [ALL]`, with no capability added back;
+- `security_opt: [no-new-privileges:true]`;
+- `read_only: true`, with a `tmpfs` on `/tmp`, and on `/run` for gossip-node
+  and the gateway. edge-service gets no `/run` tmpfs, since Compose mounts its
+  key files under `/run/secrets/`.
+
+Each service writes only to its volumes. SQLite's `-wal` and `-shm` files stay
+next to their databases in the `sead_data` volume, never on a `tmpfs`, so a
+recreate keeps every committed write.
+
+Exceptions:
+
+- **pin-service, gossip-node and the gateway run as root.** sead-core,
+  edge-service and source-data-service run as `sead`. Without capabilities,
+  root in these containers can't bypass file permissions. gossip-node has no
+  `user:` override: it writes its identity key into the root-owned directory
+  mounted at `/data/gossip-keys`, and as another user it couldn't, so its
+  PeerId would change on every recreate.
+- **The gateway's image has no `USER`.** The gateway reads its TLS key,
+  `server.key` at mode `0600`, from `./secrets`, mounted read-only at
+  `/etc/gateway/certs`, and writes no files.
+- **edge-service gets a larger memory limit than the other services.** An
+  out-of-memory kill between an XMSS signature and the event's post spends a
+  key index without using it. The memory limits are not set yet.
+
 ### Start
 
 Start the stack:
