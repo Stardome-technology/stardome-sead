@@ -323,7 +323,7 @@ There are two ways to obtain a token:
 This is what production uses. When edge-service commits an artifact, it
 automatically generates a pin token and calls storage-gateway's `/pin` with it.
 You don't mint a token yourself — just ensure the **org signing key** is
-configured in edge-service (env `EDGE_ORG_SIGNING_KEY`). No CLI/HTTP call needed.
+configured in edge-service (the file `EDGE_ORG_SIGNING_KEY_FILE` names). No CLI/HTTP call needed.
 
 ### Option B — pre-generate an org-wide token with the `gen-token` CLI
 

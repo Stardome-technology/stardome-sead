@@ -49,16 +49,25 @@ services:
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
+    # The three keys come from host files as Compose secrets (top-level
+    # `secrets:` below), mounted under /run/secrets/ and passed by path, so no
+    # key appears in the container's command, arguments or environment.
+    secrets:
+      - edge_signing_key
+      - org_signing_key
+      - org_public_key
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=edge-service
       # ── Identity vars — org key rotation ─────────────────────────────────
       # These are the identity vars consumed by edge-service and gossip-node
       # below. On an org key rotation (docs/org-key-rotation.md) these change:
-      #   EDGE_ORG_SIGNING_KEY / EDGE_ORG_PUBLIC_KEY  new org XMSS keypair
+      #   the files EDGE_ORG_SIGNING_KEY_FILE / EDGE_ORG_PUBLIC_KEY_FILE
+      #                          name: new org XMSS keypair
       #   EDGE_ORG_ID            unchanged for a same-org_id rotation; new id
       #                          only in the distinct-org variant
-      #   EDGE_ID / EDGE_SIGNING_KEY  only if the edge key is rotated too
+      #   EDGE_ID / the file EDGE_SIGNING_KEY_FILE names  only if the edge key
+      #                          is rotated too
       #   GOSSIP_ORG_ID / GOSSIP_OBSERVE_ORGS  same rule as EDGE_ORG_ID
       #   GOSSIP_BOOTSTRAP     unchanged (transport PeerIDs are not org identity)
       # After updating `.env`:
@@ -76,9 +85,6 @@ services:
       # ──────────────────────────────────────────────────────────────────────
       - EDGE_ORG_ID=${EDGE_ORG_ID:?}
       - EDGE_ID=${EDGE_ID:?}
-      - EDGE_SIGNING_KEY=${EDGE_SIGNING_KEY:?}
-      - EDGE_ORG_SIGNING_KEY=${EDGE_ORG_SIGNING_KEY:?}
-      - EDGE_ORG_PUBLIC_KEY=${EDGE_ORG_PUBLIC_KEY:-}
       - EDGE_TOKEN_TTL=${EDGE_TOKEN_TTL:-300}
       - EDGE_PIN_SERVICE_URL=${EDGE_PIN_SERVICE_URL:-pin-service:50056}
       - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-1}
@@ -93,9 +99,9 @@ services:
     command: ["edge-service", "--port", "50055", "--db", "/data/edge.db",
               "--org-id", "${EDGE_ORG_ID:?}",
               "--edge-id", "${EDGE_ID:?}",
-              "--signing-key", "${EDGE_SIGNING_KEY:?}",
-              "--org-signing-key", "${EDGE_ORG_SIGNING_KEY:?}",
-              "--org-public-key", "${EDGE_ORG_PUBLIC_KEY:-}",
+              "--signing-key-file", "/run/secrets/edge_signing_key",
+              "--org-signing-key-file", "/run/secrets/org_signing_key",
+              "--org-public-key-file", "/run/secrets/org_public_key",
               "--token-ttl", "${EDGE_TOKEN_TTL:-300}",
               "--pin-service-url", "${EDGE_PIN_SERVICE_URL:-pin-service:50056}",
               "--sead-core-url", "sead-core:50051",
@@ -290,6 +296,21 @@ services:
 
 volumes:
   sead_data:
+
+# edge-service's keys, each a host file holding the key as bare hex on one line
+# (no `KEY=` prefix), at mode 0400, owned by 100:101 (edge-service's `sead`
+# user) on native Docker Engine on Linux, or by the operator on Docker Desktop.
+# See the README, "Key files". Keep them outside ./secrets/, which the gateway
+# mounts.
+# With a file unreadable or empty, edge-service exits without its keys, since
+# the inline key flags it would fall back to are no longer passed.
+secrets:
+  edge_signing_key:
+    file: ${EDGE_SIGNING_KEY_FILE:?}
+  org_signing_key:
+    file: ${EDGE_ORG_SIGNING_KEY_FILE:?}
+  org_public_key:
+    file: ${EDGE_ORG_PUBLIC_KEY_FILE:?}
 
 networks:
   sead-network:

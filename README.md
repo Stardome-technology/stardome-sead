@@ -151,15 +151,18 @@ production pair. With a required variable (marked **†** in the
 
 ### Configure
 
-Create a `.env` file with your key values:
+Write edge-service's three key files as [Key files](#key-files) describes,
+then create a `.env` file with your IDs, the key files' paths and the other
+values:
 
 ```bash
 cat > .env << EOF
 EDGE_ORG_ID=<org_id_hex>
 EDGE_ID=<edge_id_hex>
-EDGE_SIGNING_KEY=<edge_secret_key_hex>
-EDGE_ORG_SIGNING_KEY=<org_secret_key_hex>
-EDGE_ORG_PUBLIC_KEY=<org_public_key_hex>
+# Paths to the key files, absolute or relative to the clone
+EDGE_SIGNING_KEY_FILE=./keys/edge_signing_key.hex
+EDGE_ORG_SIGNING_KEY_FILE=./keys/org_signing_key.hex
+EDGE_ORG_PUBLIC_KEY_FILE=./keys/org_public_key.hex
 # Gateway auth (required in production — see the gateway README)
 SEAD_AUTH_SECRET=<shared-secret>
 # gossip-node (C2 sync observer): this node's own org + orgs it observes.
@@ -170,6 +173,64 @@ GOSSIP_BOOTSTRAP=/ip4/<peer-ip>/tcp/31002/p2p/<peerid>
 GOSSIP_ADVERTISE=/ip4/<public_ip>/tcp/31002
 EOF
 ```
+
+### Key files
+
+edge-service reads its three keys from host files that Compose mounts as
+secrets under `/run/secrets/` in the container, and gets only their paths on
+its command line. No key appears in the container's command, arguments or
+environment, so `docker inspect` of edge-service shows none.
+
+| Variable | The file it names holds |
+|----------|-------------------------|
+| `EDGE_SIGNING_KEY_FILE` | the edge key's `SECRET_KEY` |
+| `EDGE_ORG_SIGNING_KEY_FILE` | the org key's `SECRET_KEY` |
+| `EDGE_ORG_PUBLIC_KEY_FILE` | the org key's `PUBLIC_KEY` |
+
+- **Bare hex.** Each file holds one key as hex on one line: the value alone,
+  without its `SECRET_KEY` or `PUBLIC_KEY` label. A trailing newline is fine.
+- **Owner and mode.** edge-service runs as `sead`, uid `100` and gid `101`,
+  and must be able to read each file. Each file has mode `0400`. Its owner
+  depends on the platform:
+  - **Native Docker Engine on Linux** keeps the host file's owner on a
+    bind-mounted secret, so each file must be owned by `100:101`:
+    `sudo chown 100:101 keys/*.hex && sudo chmod 0400 keys/*.hex`. Only root
+    and the container can then read the files. You don't need to read them
+    back after writing them. With the files owned by you instead,
+    edge-service fails to read them with `EACCES` and exits. With rootless
+    Docker or `userns-remap`, the container's uid and gid map to other ids on
+    the host: give each file the host ids that `100` and `101` map to.
+  - **Docker Desktop** shows a mounted file to the container as owned by the
+    container's user, so files owned by the user who runs `docker compose`
+    work: `chmod 0400 keys/*.hex`.
+
+  Outside Swarm mode, Compose ignores `uid`, `gid` and `mode` in the long
+  `secrets` syntax, with a warning, so set the owner and mode on the host.
+- **Location.** Keep the files outside `./secrets/`, which the gateway
+  mounts. `.gitignore` ignores `keys/` in the clone.
+- **Failure.** With a file unreadable or empty, edge-service exits at start
+  without its keys, since Compose no longer passes the inline `--signing-key`,
+  `--org-signing-key` and `--org-public-key` flags it would fall back to.
+
+> **Known gap:** the gateway still reads `SEAD_AUTH_SECRET`,
+> `GATEWAY_EDGE_TOKENS` and `GATEWAY_PEER_TOKEN` from environment variables,
+> so anyone who can run `docker inspect` on the gateway container can read
+> them. Restrict access to the Docker daemon on the host until the gateway can
+> read them from files.
+
+> **The org signing key on the host is a deliberate risk.** edge-service signs
+> pin and auth tokens with the org secret key, so every edge host of an org
+> holds it, and anyone who takes it from one host can sign as the org. Three
+> mitigations limit the risk:
+>
+> - **Few trusted edges per org.** Give an org's key only to the few hosts you
+>   trust as much as the org itself.
+> - **The persisted token index.** edge-service persists the org key's signer
+>   state in `edge.db` after every signature, so a restart never reuses a leaf
+>   (see [XMSS key state persistence](#xmss-key-state-persistence-org-and-edge-keys)).
+> - **Org key rotation.** When a host that holds the key is lost or exposed,
+>   rotate the org key as [docs/org-key-rotation.md](docs/org-key-rotation.md)
+>   describes.
 
 > **Key env for the gossip sync** — `GOSSIP_ORG_ID` configures the
 > `gossip-node` C2 observer (its own org, always observed). `GOSSIP_OBSERVE_ORGS`
@@ -304,9 +365,9 @@ curl -k https://localhost:30080/health
 | `LOG_LEVEL` | all | No | `info` | Logging verbosity |
 | `EDGE_ORG_ID` | edge-service | **†** | — | Organization ID (hex) |
 | `EDGE_ID` | edge-service | **†** | — | Edge device ID (hex) |
-| `EDGE_SIGNING_KEY` | edge-service | **†** | — | Edge XMSS private key (hex) |
-| `EDGE_ORG_SIGNING_KEY` | edge-service | **†** | — | Org XMSS key for auth tokens (hex) |
-| `EDGE_ORG_PUBLIC_KEY` | edge-service | No | — | Org XMSS public key (hex) |
+| `EDGE_SIGNING_KEY_FILE` | edge-service | **†** | — | Host path of the file holding the edge XMSS secret key (bare hex); see [Key files](#key-files) |
+| `EDGE_ORG_SIGNING_KEY_FILE` | edge-service | **†** | — | Host path of the file holding the org XMSS secret key, which signs auth tokens (bare hex) |
+| `EDGE_ORG_PUBLIC_KEY_FILE` | edge-service | **†** | — | Host path of the file holding the org XMSS public key (bare hex) |
 | `EDGE_TOKEN_TTL` | edge-service | No | `300` | Auth token TTL in seconds |
 | `EDGE_STORAGE_GATEWAY_URL` | edge-service | No | `storage-gateway:50052` | Storage gateway gRPC target |
 | `EDGE_PIN_SERVICE_URL` | edge-service | No | `pin-service:50056` | Pin service gRPC target — replaces the storage-gateway IPFS pin leg; edge pins via the Go pin service (`sead_rpc.Storage`) |
