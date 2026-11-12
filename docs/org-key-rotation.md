@@ -223,7 +223,7 @@ Update the node's `.env` (per edge) to the new identity:
 
 | Variable | New value on rotation |
 |---|---|
-| `EDGE_ORG_SIGNING_KEY_FILE` | a file holding the **new** org secret key (bare hex, mode `0400`; see the README, "Key files") |
+| `EDGE_ORG_SIGNING_KEY_FILE` | a file holding the **new** org secret key (bare hex, mode `0400`, owned by `100:101` on native Docker Engine on Linux; see the README, "Key files") |
 | `EDGE_ORG_PUBLIC_KEY_FILE` | a file holding the **new** org public key |
 | `EDGE_ORG_ID` | unchanged for a same-org_id rotation; new org id only in the distinct-org variant |
 | `EDGE_ID` / `EDGE_SIGNING_KEY_FILE` | only if the **edge** key is rotated too |

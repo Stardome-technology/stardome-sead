@@ -189,14 +189,23 @@ environment, so `docker inspect` of edge-service shows none.
 
 - **Bare hex.** Each file holds one key as hex on one line: the value alone,
   without its `SECRET_KEY` or `PUBLIC_KEY` label. A trailing newline is fine.
-- **Owner and mode.** By default, each file is owned by the user who runs
-  `docker compose` and has mode `0400`, readable by its owner only:
-  `chmod 0400 keys/*.hex`. Docker Desktop's file sharing shows a mounted file
-  to the container as owned by the container's user, so edge-service, which
-  runs as `sead`, can read it. Outside Swarm mode, Compose ignores `uid`, `gid`
-  and `mode` in the long `secrets` syntax, with a warning. On native Docker
-  Engine on Linux, the container sees the host file's owner, and this setup
-  has not been tested there: check that edge-service starts healthy.
+- **Owner and mode.** edge-service runs as `sead`, uid `100` and gid `101`,
+  and must be able to read each file. Each file has mode `0400`. Its owner
+  depends on the platform:
+  - **Native Docker Engine on Linux** keeps the host file's owner on a
+    bind-mounted secret, so each file must be owned by `100:101`:
+    `sudo chown 100:101 keys/*.hex && sudo chmod 0400 keys/*.hex`. Only root
+    and the container can then read the files. You don't need to read them
+    back after writing them. With the files owned by you instead,
+    edge-service fails to read them with `EACCES` and exits. With rootless
+    Docker or `userns-remap`, the container's uid and gid map to other ids on
+    the host: give each file the host ids that `100` and `101` map to.
+  - **Docker Desktop** shows a mounted file to the container as owned by the
+    container's user, so files owned by the user who runs `docker compose`
+    work: `chmod 0400 keys/*.hex`.
+
+  Outside Swarm mode, Compose ignores `uid`, `gid` and `mode` in the long
+  `secrets` syntax, with a warning, so set the owner and mode on the host.
 - **Location.** Keep the files outside `./secrets/`, which the gateway
   mounts. `.gitignore` ignores `keys/` in the clone.
 - **Failure.** With a file unreadable or empty, edge-service exits at start

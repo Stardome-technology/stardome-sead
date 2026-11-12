@@ -298,8 +298,10 @@ volumes:
   sead_data:
 
 # edge-service's keys, each a host file holding the key as bare hex on one line
-# (no `KEY=` prefix), owned by the operator at mode 0400. See the README,
-# "Key files". Keep them outside ./secrets/, which the gateway mounts.
+# (no `KEY=` prefix), at mode 0400, owned by 100:101 (edge-service's `sead`
+# user) on native Docker Engine on Linux, or by the operator on Docker Desktop.
+# See the README, "Key files". Keep them outside ./secrets/, which the gateway
+# mounts.
 # With a file unreadable or empty, edge-service exits without its keys, since
 # the inline key flags it would fall back to are no longer passed.
 secrets:
