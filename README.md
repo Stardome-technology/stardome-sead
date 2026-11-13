@@ -311,6 +311,58 @@ environment, so `docker inspect` of edge-service shows none.
 > signature-verification path. Genuinely invalid events are rejected and
 > dropped, never retried.
 
+### Container hardening
+
+`compose.production.yaml` hardens every service:
+
+- `cap_drop: [ALL]`, with no capability added back;
+- `security_opt: [no-new-privileges:true]`;
+- `read_only: true`, with a `tmpfs` on `/tmp`, and on `/run` for gossip-node
+  and the gateway. edge-service gets no `/run` tmpfs, since Compose mounts its
+  key files under `/run/secrets/`.
+
+Each service writes only to its volumes. SQLite's `-wal` and `-shm` files stay
+next to their databases in the `sead_data` volume, never on a `tmpfs`, so a
+recreate keeps every committed write.
+
+It also limits every service's resources:
+
+- `mem_limit: 256m`, and `512m` on edge-service;
+- `cpus: "0.5"`;
+- `pids_limit: 256`.
+
+The limits are sized for 1-vCPU, 2 GiB hosts. They are per-service ceilings,
+not reservations: together they add up to 1.75 GiB of memory and 3 CPUs,
+against measured peaks of at most 32 MiB and 12% of a core per service under a
+sustained ingest, commit and pin burst. On larger hosts, raise them in
+proportion.
+
+Exceptions:
+
+- **gossip-node and the gateway run as root.** sead-core, edge-service and
+  source-data-service run as `sead`, and pin-service is pinned to `100:101`
+  (the same uid/gid): its image has no `USER`, and with all capabilities
+  dropped even root can't bypass file permissions — pin-service writes its
+  CID-tracker DB into the `sead_data` volume, owned `100:101`. Without
+  capabilities, root in the remaining containers can't bypass file
+  permissions either. gossip-node has no `user:` override: it writes its
+  identity key into the root-owned directory mounted at `/data/gossip-keys`,
+  and as another user it couldn't, so its PeerId would change on every
+  recreate.
+- **On an existing deployment, `chown 100:101 /data/pin-service.db*` once**
+  before first start under this overlay: volumes created by older stacks may
+  hold a root-owned pin-service DB that uid 100 can't write.
+- **The gateway's image has no `USER`, so it runs as root.** It reads its TLS
+  key, `server.key` at mode `0600`, from `./secrets`, mounted read-only at
+  `/etc/gateway/certs`, and writes no files. Because capabilities are dropped,
+  root here obeys file permissions like any user: `server.key` must be owned
+  by (or readable by) root — a key owned by an unprivileged user at `0600`
+  makes the gateway crash-loop with `permission denied`.
+- **edge-service gets a larger memory limit than the other services.** An
+  out-of-memory kill between an XMSS signature and the event's post spends a
+  key index without using it, so edge-service gets 512 MiB rather than
+  256 MiB.
+
 ### Start
 
 Start the stack:

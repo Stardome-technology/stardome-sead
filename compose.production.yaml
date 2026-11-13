@@ -5,22 +5,76 @@
 #
 # edge-service signs with real XMSS keys and relies on the key indices stored in
 # `edge.db` (see the README, "XMSS key-state persistence").
+#
+# Hardening (see the README, "Container hardening"): every service drops all
+# Linux capabilities and adds none back, can't gain privileges, and runs on a
+# read-only root filesystem with a `/tmp` tmpfs. gossip-node and the gateway
+# also get a `/run` tmpfs. Each service writes only to its volumes: SQLite's
+# `-wal` and `-shm` files stay next to their databases in `/data`, never on a
+# tmpfs.
+#
+# Limits: every service gets 256 MiB of memory, half a CPU and 256 processes;
+# edge-service gets 512 MiB. They are sized for 1-vCPU, 2 GiB hosts; raise them
+# in proportion on larger hosts.
+
+x-hardening: &hardening
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  read_only: true
+  mem_limit: 256m
+  cpus: "0.5"
+  pids_limit: 256
 
 services:
   sead-core:
     image: ghcr.io/stardome-technology/stardome-sead/sead-core:latest
+    <<: *hardening
+    tmpfs:
+      - /tmp
 
   edge-service:
     image: ghcr.io/stardome-technology/stardome-sead/edge-service:latest
+    <<: *hardening
+    # A larger memory limit: an out-of-memory kill between an XMSS signature
+    # and the event's post spends a key index without using it.
+    mem_limit: 512m
+    # No `/run` tmpfs: Compose mounts the key secrets under /run/secrets/.
+    tmpfs:
+      - /tmp
 
   pin-service:
     image: ghcr.io/stardome-technology/stardome-sead/pin-service:latest
+    <<: *hardening
+    # The image has no `USER`, so it would run as root — and with all
+    # capabilities dropped, root can't override file permissions either.
+    # pin-service writes its CID-tracker SQLite DB into the shared `sead_data`
+    # volume, owned 100:101 (the `sead` user the C++ services run as), so run
+    # it as that owner. On an EXISTING deployment, chown any root-owned
+    # /data/pin-service.db* files to 100:101 once, before first start.
+    user: "100:101"
+    tmpfs:
+      - /tmp
 
   source-data-service:
     image: ghcr.io/stardome-technology/stardome-sead/source-data-service:latest
+    <<: *hardening
+    tmpfs:
+      - /tmp
 
   gossip-node:
     image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
+    <<: *hardening
+    # No `user:`: gossip-node runs as root and writes its identity key into
+    # the root-owned directory mounted at /data/gossip-keys. A non-root user
+    # couldn't write it, so the PeerId would change on every recreate.
+    tmpfs:
+      - /tmp
+      - /run
 
   gateway:
     image: ghcr.io/stardome-technology/stardome-sead-gateway:latest
+    <<: *hardening
+    tmpfs:
+      - /tmp
+      - /run
