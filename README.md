@@ -325,6 +325,18 @@ Each service writes only to its volumes. SQLite's `-wal` and `-shm` files stay
 next to their databases in the `sead_data` volume, never on a `tmpfs`, so a
 recreate keeps every committed write.
 
+It also limits every service's resources:
+
+- `mem_limit: 256m`, and `512m` on edge-service;
+- `cpus: "0.5"`;
+- `pids_limit: 256`.
+
+The limits are sized for 1-vCPU, 2 GiB hosts. They are per-service ceilings,
+not reservations: together they add up to 1.75 GiB of memory and 3 CPUs,
+against measured peaks of at most 32 MiB and 12% of a core per service under a
+sustained ingest, commit and pin burst. On larger hosts, raise them in
+proportion.
+
 Exceptions:
 
 - **pin-service, gossip-node and the gateway run as root.** sead-core,
@@ -338,7 +350,8 @@ Exceptions:
   `/etc/gateway/certs`, and writes no files.
 - **edge-service gets a larger memory limit than the other services.** An
   out-of-memory kill between an XMSS signature and the event's post spends a
-  key index without using it. The memory limits are not set yet.
+  key index without using it, so edge-service gets 512 MiB rather than
+  256 MiB.
 
 ### Start
 
