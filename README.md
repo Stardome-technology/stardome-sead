@@ -339,15 +339,25 @@ proportion.
 
 Exceptions:
 
-- **pin-service, gossip-node and the gateway run as root.** sead-core,
-  edge-service and source-data-service run as `sead`. Without capabilities,
-  root in these containers can't bypass file permissions. gossip-node has no
-  `user:` override: it writes its identity key into the root-owned directory
-  mounted at `/data/gossip-keys`, and as another user it couldn't, so its
-  PeerId would change on every recreate.
-- **The gateway's image has no `USER`.** The gateway reads its TLS key,
-  `server.key` at mode `0600`, from `./secrets`, mounted read-only at
-  `/etc/gateway/certs`, and writes no files.
+- **gossip-node and the gateway run as root.** sead-core, edge-service and
+  source-data-service run as `sead`, and pin-service is pinned to `100:101`
+  (the same uid/gid): its image has no `USER`, and with all capabilities
+  dropped even root can't bypass file permissions — pin-service writes its
+  CID-tracker DB into the `sead_data` volume, owned `100:101`. Without
+  capabilities, root in the remaining containers can't bypass file
+  permissions either. gossip-node has no `user:` override: it writes its
+  identity key into the root-owned directory mounted at `/data/gossip-keys`,
+  and as another user it couldn't, so its PeerId would change on every
+  recreate.
+- **On an existing deployment, `chown 100:101 /data/pin-service.db*` once**
+  before first start under this overlay: volumes created by older stacks may
+  hold a root-owned pin-service DB that uid 100 can't write.
+- **The gateway's image has no `USER`, so it runs as root.** It reads its TLS
+  key, `server.key` at mode `0600`, from `./secrets`, mounted read-only at
+  `/etc/gateway/certs`, and writes no files. Because capabilities are dropped,
+  root here obeys file permissions like any user: `server.key` must be owned
+  by (or readable by) root — a key owned by an unprivileged user at `0600`
+  makes the gateway crash-loop with `permission denied`.
 - **edge-service gets a larger memory limit than the other services.** An
   out-of-memory kill between an XMSS signature and the event's post spends a
   key index without using it, so edge-service gets 512 MiB rather than
