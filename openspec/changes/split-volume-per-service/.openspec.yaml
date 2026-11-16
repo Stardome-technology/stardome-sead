@@ -1,0 +1,20 @@
+schema: spec-driven
+created: 2026-11-16
+status: proposed
+description: >-
+  Give each service its own volume so edge.db (the XMSS key index) is isolated
+  from the other databases, add a stop-the-stack migration from the shared
+  sead_data volume, and add a backup script that deliberately excludes edge.db.
+artifacts:
+  - id: proposal
+    status: done
+    depends_on: []
+  - id: design
+    status: done
+    depends_on: [proposal]
+  - id: specs
+    status: done
+    depends_on: [proposal]
+  - id: tasks
+    status: done
+    depends_on: [design, specs]
