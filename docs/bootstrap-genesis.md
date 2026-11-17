@@ -7,15 +7,18 @@ before the auth stack can verify tokens. This is a one-time operational step.
 > its `edge_authorization` is resolvable in sead-core, and enrollment below is
 > served by the gateway → sead-core path (edge-service is **not** required to
 > POST these events). The gateway therefore does **not** wait on edge-service.
-> On a fresh node (after `down -v` or a new deploy) a full `docker compose up -d`
-> leaves **edge-service exited — expected**. Complete Step 1 (org-genesis) and
-> Step 2 (edge-authorization) below, seed the key-index DB as the initial
-> `edge.db` (see "Seed the org key index into edge-service"), then start it:
+> edge-service is in the `edge` profile, so on a fresh node (after `down -v` or a
+> new deploy) a full `docker compose up -d` leaves **edge-service stopped —
+> expected**. Complete Step 1 (org-genesis) and Step 2 (edge-authorization)
+> below, seed the key-index DB as the initial `edge.db` (see "Seed the org key
+> index into edge-service"), then enable the profile in `.env` and start it:
 > ```bash
-> docker compose -f <compose-file> up -d edge-service
+> echo 'COMPOSE_PROFILES=edge' >> .env
+> docker compose -f <compose-files> up -d
 > ```
-> For ordinary up/down cycles **after** enrollment, the usual full `up -d` works
-> normally (edge-service auto-resolves its authorization at startup).
+> With `COMPOSE_PROFILES=edge` in `.env`, ordinary up/down cycles **after**
+> enrollment include edge-service (it auto-resolves its authorization at
+> startup). Without it, a `down` leaves a running edge-service orphaned.
 
 ## Prerequisites
 
