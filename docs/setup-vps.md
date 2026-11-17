@@ -152,6 +152,10 @@ docker compose -f compose.yaml -f compose.production.yaml up -d
 curl -k https://localhost:30080/health
 ```
 
+edge-service is in the `edge` profile, so this `up -d` leaves it stopped until
+the node is enrolled; enrollment ends by setting `COMPOSE_PROFILES=edge` in
+`.env` (see the README, "3d — Bring up edge-service").
+
 ---
 
 ## 4. Deploy the Explorer

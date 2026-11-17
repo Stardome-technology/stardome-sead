@@ -24,12 +24,31 @@
 # shared `sead-network` bridge. `auth-service` and `verifier-service` are
 # collapsed into the gateway (no longer standalone services). pin-service is the
 # sole storage authority (AddToIPFS/RetrieveFromIPFS/ResolveCIDByPayloadHash).
+#
+# Restarts and logs (see the README, "Restarts and logs"): every long-running
+# service merges the `x-runtime` block below, so it restarts unless stopped,
+# logs to the `local` driver with rotated, size-limited files, and gets 30 s to
+# stop before Docker kills it. edge-service merges the block but sets no restart
+# policy yet.
+#
+# edge-service is in the `edge` profile, so it starts only once the node is
+# enrolled: after enrollment, set `COMPOSE_PROFILES=edge` in `.env` (see
+# `.env.example`), and a plain `docker compose up -d` or `down` includes it.
 
 name: stardome-sead
 
+x-runtime: &runtime
+  restart: unless-stopped
+  logging:
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "5"
+  stop_grace_period: 30s
+
 services:
   sead-core:
-    restart: unless-stopped
+    <<: *runtime
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
@@ -42,10 +61,20 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 30s
     networks:
       - sead-network
 
   edge-service:
+    <<: *runtime
+    # No restart policy yet: a later change enables it, once edge-service's
+    # image saves the edge signer's key index.
+    restart: "no"
+    # Starts only with the `edge` profile, once the node is enrolled: set
+    # `COMPOSE_PROFILES=edge` in `.env`. Without it in `.env`, a `down` leaves
+    # a running edge-service orphaned, and a later `up -d` keeps its old image
+    # and environment.
+    profiles: [edge]
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
@@ -89,7 +118,7 @@ services:
       - EDGE_PIN_SERVICE_URL=${EDGE_PIN_SERVICE_URL:-pin-service:50056}
       - EDGE_WATCHDOG_INTERVAL_SEC=${EDGE_WATCHDOG_INTERVAL_SEC:-1}
       - EDGE_PIN_INTERVAL_SEC=${EDGE_PIN_INTERVAL_SEC:-30}
-      - EDGE_PIN_MAX_RETRIES=${EDGE_PIN_MAX_RETRIES:--1}
+      - EDGE_PIN_MAX_RETRIES=${EDGE_PIN_MAX_RETRIES:-20}
       - EDGE_PIN_BACKOFF_BASE_SEC=${EDGE_PIN_BACKOFF_BASE_SEC:-30}
       - EDGE_PIN_BACKOFF_CAP_SEC=${EDGE_PIN_BACKOFF_CAP_SEC:-86400}
       - EDGE_COMMIT_STRATEGY=${EDGE_COMMIT_STRATEGY:-single}
@@ -109,7 +138,7 @@ services:
               "--commit-strategy", "${EDGE_COMMIT_STRATEGY:-single}",
               "--batch-flush-interval", "${EDGE_BATCH_FLUSH_INTERVAL_SEC:-300}",
               "--pin-interval", "${EDGE_PIN_INTERVAL_SEC:-30}",
-              "--pin-max-retries", "${EDGE_PIN_MAX_RETRIES:--1}",
+              "--pin-max-retries", "${EDGE_PIN_MAX_RETRIES:-20}",
               "--pin-backoff-base", "${EDGE_PIN_BACKOFF_BASE_SEC:-30}",
               "--pin-backoff-cap", "${EDGE_PIN_BACKOFF_CAP_SEC:-86400}",
               "--edge-authorization-event-id", "${EDGE_AUTHORIZATION_EVENT_ID:-}"]
@@ -123,10 +152,14 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      # Longer than the others: on a cold node edge-service can take more than
+      # the 45 s that three failed checks at a 15 s interval allow.
+      start_period: 60s
     networks:
       - sead-network
 
   pin-service:
+    <<: *runtime
     # No public ports — gRPC-only, sole storage authority (AddToIPFS,
     # RetrieveFromIPFS, ResolveCIDByPayloadHash); reachable on sead-network.
     volumes:
@@ -143,10 +176,12 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 30s
     networks:
       - sead-network
 
   source-data-service:
+    <<: *runtime
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
@@ -161,10 +196,12 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 30s
     networks:
       - sead-network
 
   gossip-node:
+    <<: *runtime
     # Option A (C2): own libp2p peer per node.
     # - On the sead-network bridge so it reaches sead-core/gateway by name.
     # - Publish the libp2p TCP port so other POCs reach this peer at the node's
@@ -226,11 +263,11 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
-    restart: unless-stopped
     networks:
       - sead-network
 
   gateway:
+    <<: *runtime
     ports:
       - "30080:30080"
     volumes:
@@ -274,9 +311,10 @@ services:
     # resolvable in sead-core, and enrollment (POST org-genesis /
     # edge-authorization) is served by the gateway -> sead-core path. Making the
     # gateway wait on edge-service would deadlock first-time enrollment.
-    # edge-service is gRPC-only (no public port); it starts later via
-    # `docker compose ... up -d edge-service` once enrollment is done. The
-    # gateway's /health reports "degraded" until then — honest, not blocking.
+    # edge-service is gRPC-only (no public port) and in the `edge` profile; it
+    # starts once enrollment is done and `COMPOSE_PROFILES=edge` is set in
+    # `.env`. The gateway's /health reports "degraded" until then — honest, not
+    # blocking.
     depends_on:
       sead-core:
         condition: service_healthy
@@ -290,7 +328,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    restart: unless-stopped
     networks:
       - sead-network
 

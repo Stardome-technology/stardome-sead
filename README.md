@@ -363,6 +363,27 @@ Exceptions:
   key index without using it, so edge-service gets 512 MiB rather than
   256 MiB.
 
+### Restarts and logs
+
+`compose.yaml` gives every long-running service, from one `x-runtime` block:
+
+- `restart: unless-stopped`, except on edge-service, which gets
+  `restart: "no"` until its image saves the edge signer's key index;
+- the `local` log driver, keeping at most five 10 MB files per container;
+- `stop_grace_period: 30s`, so `docker compose stop` sends each service
+  `SIGTERM` and kills it only after 30 s.
+
+Its health checks give sead-core, pin-service and source-data-service a 30 s
+`start_period`, edge-service 60 s and the gateway 10 s, during which a failed
+check doesn't count.
+
+edge-service is in the `edge` profile, so `up -d` starts it only once the node
+is enrolled and `COMPOSE_PROFILES=edge` is set in `.env`
+([3d — Bring up edge-service](#3d--bring-up-edge-service)). **Every enrolled
+node sets `COMPOSE_PROFILES=edge` in its `.env` before it deploys this
+version.** Without it, a `docker compose down` leaves a running edge-service
+orphaned, and a later `up -d` keeps its old image and environment.
+
 ### Start
 
 Start the stack:
@@ -375,17 +396,18 @@ docker compose -f compose.yaml -f compose.production.yaml up -d
 curl -k https://localhost:30080/health
 ```
 
-> **On a fresh node (or after `down -v`) `edge-service` exits at startup —
-> expected.** `edge-service` fails-fast until its `edge_authorization` is
-> resolvable in sead-core, so it won't emit commits with empty
-> `dependency_refs[94]`. Enrollment (POST org-genesis / edge-authorization)
-> goes through the **gateway → sead-core** path and does not need edge-service,
-> so the gateway does not wait on it. `/health` will show `3 healthy /
-> 1 unhealthy` (edge-service) until you enroll — follow [Step 3](#step-3--bootstrap-genesis)
-> and it will be brought up at the end.
+> **On a fresh node (or after `down -v`) `up -d` doesn't start `edge-service`
+> — expected.** `edge-service` is in the `edge` profile, since it fails-fast
+> until its `edge_authorization` is resolvable in sead-core, so it won't emit
+> commits with empty `dependency_refs[94]`. Enrollment (POST org-genesis /
+> edge-authorization) goes through the **gateway → sead-core** path and does
+> not need edge-service, so the gateway does not wait on it. `/health` will
+> show `3 healthy / 1 unhealthy` (edge-service) until you enroll — follow
+> [Step 3](#step-3--bootstrap-genesis) and it will be brought up at the end.
 >
-> After the org is enrolled, `edge-service` resolves its authorization from
-> sead-core at startup, so ordinary `up -d` / `down` cycles work normally.
+> After the org is enrolled, set `COMPOSE_PROFILES=edge` in `.env`:
+> `edge-service` then resolves its authorization from sead-core at startup,
+> and ordinary `up -d` / `down` cycles include it.
 
 > **⚠️ About `-k` in the curl examples below.** The `-k` flag disables TLS
 > certificate verification. It is used throughout this guide because the
@@ -414,6 +436,7 @@ curl -k https://localhost:30080/health
 
 | Variable | Service | Required | Default | Description |
 |----------|---------|----------|---------|-------------|
+| `COMPOSE_PROFILES` | — | No | — | Set to `edge` once the node is enrolled, so `up -d` and `down` include edge-service; see [Restarts and logs](#restarts-and-logs) |
 | `LOG_LEVEL` | all | No | `info` | Logging verbosity |
 | `EDGE_ORG_ID` | edge-service | **†** | — | Organization ID (hex) |
 | `EDGE_ID` | edge-service | **†** | — | Edge device ID (hex) |
@@ -425,7 +448,7 @@ curl -k https://localhost:30080/health
 | `EDGE_PIN_SERVICE_URL` | edge-service | No | `pin-service:50056` | Pin service gRPC target — replaces the storage-gateway IPFS pin leg; edge pins via the Go pin service (`sead_rpc.Storage`) |
 | `EDGE_WATCHDOG_INTERVAL_SEC` | edge-service | No | `1` | DAG commit (watchdog) cadence in seconds — near-realtime commit publish |
 | `EDGE_PIN_INTERVAL_SEC` | edge-service | No | `30` | IPFS pin loop cadence (independent, slow) |
-| `EDGE_PIN_MAX_RETRIES` | edge-service | No | `-1` | Max pin retries (`-1` = unlimited) |
+| `EDGE_PIN_MAX_RETRIES` | edge-service | No | `20` | Max pin retries per receipt (`-1` = unlimited). Each attempt spends one org-key XMSS leaf; with the default backoff, 20 span about 9.4 days |
 | `EDGE_PIN_BACKOFF_BASE_SEC` | edge-service | No | `30` | Pin retry exponential backoff base (seconds) |
 | `EDGE_PIN_BACKOFF_CAP_SEC` | edge-service | No | `86400` | Pin retry max backoff delay (seconds) |
 | `EDGE_COMMIT_STRATEGY` | edge-service | No | `single` | `single` or `batch` |
@@ -832,12 +855,14 @@ resumes at leaf ≥ 2 instead of reusing the bootstrap leaves. In the merge case
 `key_index` row. Full procedure:
 [docs/bootstrap-genesis.md — Seed the org key index](docs/bootstrap-genesis.md#seed-the-org-key-index-into-edge-service-bootstrap--seed--first-start).
 
-Start `edge-service` (it auto-resolves the
+Enable the `edge` profile in `.env`, so every later `up -d` and `down`
+includes `edge-service`, then start it (it auto-resolves the
 `edge_authorization` event_id from sead-core at startup) and confirm the whole
 stack is healthy:
 
 ```bash
-docker compose -f compose.yaml -f compose.production.yaml up -d edge-service
+echo 'COMPOSE_PROFILES=edge' >> .env
+docker compose -f compose.yaml -f compose.production.yaml up -d
 
 # Expect 4/4 healthy (edge-service now ok)
 curl -k https://localhost:30080/health

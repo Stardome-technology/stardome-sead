@@ -14,6 +14,9 @@
 #   3. no resolved value holds a `#`, the sign of a comment read as a value;
 #   4. with each required variable removed, `config --quiet` exits non-zero and
 #      its output names the variable.
+# The production pair runs with the `edge` profile, so the checks cover
+# edge-service; a last check confirms that without the profile `config` leaves
+# edge-service out, so a fresh node's `up -d` doesn't start it.
 set -u
 
 cd "$(dirname "$0")/../.."
@@ -37,7 +40,7 @@ fail() { echo "FAIL: $*"; failures=$((failures + 1)); }
 # the caller's shell can't mask a missing one.
 compose() {
   local file="$1"; shift
-  env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME $(for v in $production_required; do printf -- '-u %s ' "$v"; done) \
+  env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES $(for v in $production_required; do printf -- '-u %s ' "$v"; done) \
     docker compose --env-file "$file" "$@"
 }
 
@@ -78,7 +81,18 @@ check() {
   done
 }
 
-check "production" "$production_required" -f compose.yaml -f compose.production.yaml
+check "production" "$production_required" --profile edge -f compose.yaml -f compose.production.yaml
+
+grep -v '^COMPOSE_PROFILES=' "$env_file" >"$tmp/env.noprofile"
+services="$(compose "$tmp/env.noprofile" -f compose.yaml -f compose.production.yaml config --services 2>&1)"
+if ! printf '%s\n' "$services" | grep -qx 'sead-core'; then
+  fail "production without the edge profile: config --services fails: $(printf '%s' "$services" | tr '\n' ' ')"
+elif printf '%s\n' "$services" | grep -qx 'edge-service'; then
+  fail "production without the edge profile: config --services lists edge-service"
+else
+  pass "production without the edge profile: config --services leaves edge-service out"
+fi
+
 check "relay" "$relay_required" -f compose.relay.yaml
 
 if [ "$failures" -ne 0 ]; then
