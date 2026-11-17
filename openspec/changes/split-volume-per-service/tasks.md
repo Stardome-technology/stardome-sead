@@ -46,11 +46,15 @@ output contains no `edge.db`; the guard fires if `edge.db` is added to the list.
 
 - [ ] 4.1 README: update the volume section to the per-service layout; state that losing or restoring
   a stale `edge.db` requires an edge key rotation; warn against `docker compose down -v`.
-- [ ] 4.2 New update runbook: reconcile local compose changes → pull → stop → create volumes → migrate
+- [ ] 4.2 New update runbook: verify the working tree (`git diff --quiet origin/main -- compose.yaml
+  compose.production.yaml` must be empty; clear the stale flag with `git checkout --`) → confirm the
+  three key files exist and are readable by 100:101 → `git pull` → stop → create volumes → migrate
   (`--dry-run` first) → `up -d` → verify.
 - [ ] 4.3 Document the `docker volume create` step required on fresh nodes because `edge_data` is
   external.
 - [ ] 4.4 Document the backup: what it covers, what it excludes and why, where it writes.
+- [ ] 4.5 Document that `?? keys/` in `git status` is expected on a pre-#39 checkout and must not be
+  cleaned up — deleting it destroys the edge signing key.
 
 **Quality Gate:** the runbook can be followed start to finish on a clean node and on an existing node;
 no step assumes a systemd unit or an update script (there are none).
@@ -62,6 +66,9 @@ no step assumes a systemd unit or an update script (there are none).
   next signature uses an index greater than the last one before the migration.
 - [ ] 5.3 Repeat on edge2.
 - [ ] 5.4 Confirm `up` fails with a clear error on a node where the external volume is absent.
+- [ ] 5.5 Confirm the copied files keep ownership `100:101` (they are `syslog:syslog` on the host).
+- [ ] 5.6 Confirm the gossip PeerId is unchanged across the migration (the identity key is not in
+  `sead_data`, but the check costs nothing and catches an accidental volume swap).
 
 **Quality Gate:** both edges migrated with matching row counts and a healthy edge-service; the
 missing-volume failure mode demonstrated.

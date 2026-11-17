@@ -86,14 +86,40 @@ The script checkpoints each database before copying and runs `PRAGMA integrity_c
 Docker volume dies with `down -v` and is awkward to copy off the machine. A host directory can be
 rsynced, snapshotted, or shipped to object storage.
 
-### D7 — The update runbook starts by reconciling local compose changes
+### D7 — The update runbook verifies the working tree before pulling
 
-Both edges currently carry uncommitted modifications to `compose.yaml` and `compose.production.yaml`
-(the hardening PR applied by hand). A `git pull` will conflict. The runbook's first step is to
-reconcile or discard those local changes, then pull, then migrate with the stack stopped, then `up -d`.
+**Re-verified 2026-11-17; the original premise of this decision was stale.** Both edges are at
+`dcd5fa3` and `git status` shows `M compose.yaml` / `M compose.production.yaml`, which looks like
+the hardening PR applied by hand. It is not: `git diff origin/main -- compose.yaml
+compose.production.yaml` is **empty**. The local content is byte-identical to `origin/main`
+because the hardening PR landed as #39 (`e9c1e15`). The dirty flag is a stale index entry, not
+unmerged work.
 
-Rationale: without this step the documented procedure fails at step one on the only two nodes that
-exist.
+So the runbook's first step is a **verification**, not a reconciliation:
+
+```bash
+git diff --quiet origin/main -- compose.yaml compose.production.yaml \
+  && git checkout -- compose.yaml compose.production.yaml \
+  || echo "STOP: local compose differs from origin/main — inspect before pulling"
+```
+
+If the diff is empty, the checkout clears the flag with no content change and the pull is clean.
+If it is not empty, the operator stops and looks — which is the case the original decision was
+written for, and it still applies if anyone ever hand-edits the compose files again.
+
+Rationale: the original text told the operator to reconcile or discard local changes. On the
+actual nodes there is nothing to reconcile, and telling someone to `git stash` work that does not
+exist invites them to discard something else. Verify first, then act on what is actually there.
+
+**Two related facts the runbook must state, both verified on both edges:**
+
+- **The key files already exist.** `~/stardome-sead/keys/` holds `edge_sign.hex`, `org_sign.hex`,
+  `org_pub.hex` at mode `0400`, owned `syslog:syslog` (100:101), and `.env` already points the
+  three `EDGE_*_FILE` variables at them. The #37 secrets prerequisite is satisfied; the runbook
+  verifies it rather than creating it.
+- **`?? keys/` is expected and must not be cleaned.** `keys/` is gitignored on `origin/main` but
+  the entry arrived after `dcd5fa3`, so the current checkout shows the directory as untracked.
+  After the pull it becomes ignored. Deleting it destroys the edge signing key.
 
 ## Risks / Trade-offs
 
@@ -108,10 +134,12 @@ exist.
 
 ## Migration
 
-1. Reconcile local compose changes (D7).
-2. `git pull`.
-3. Stop the stack.
-4. `docker volume create` the new per-service volumes (including the external `edge.db` one).
+1. Verify the working tree (D7) — `git diff --quiet origin/main -- compose.yaml compose.production.yaml`
+   must be empty; clear the stale flag with `git checkout --`.
+2. Confirm the three key files exist and are readable by 100:101 (D7).
+3. `git pull`.
+4. Stop the stack.
+5. `docker volume create` the new per-service volumes (including the external `edge.db` one).
 5. Run the migration script (`--dry-run` first).
 6. `up -d`.
 7. Verify: row counts per table match, `PRAGMA integrity_check` is `ok`, edge-service is healthy and

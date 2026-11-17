@@ -56,8 +56,24 @@ threatens the key index.
 - **Blast radius: high if done wrong, zero if done right.** The migration touches the only copy of the
   XMSS key index. It must be idempotent, must verify before declaring success, and must leave the old
   files recoverable-but-poisoned (renamed) rather than deleted.
-- **Operational prerequisite**: both lab edges currently run with **uncommitted local compose
-  modifications** (the hardening PR applied by hand, never merged) and have **no backups**. The update
-  runbook must start by reconciling those local changes, or the pull conflicts before the migration
-  can run.
+- **Operational prerequisite — RE-VERIFIED 2026-11-17, the earlier note was stale.** Both edges are
+  at `dcd5fa3` with `M compose.yaml` / `M compose.production.yaml` in `git status`, but
+  `git diff origin/main -- compose.yaml compose.production.yaml` is **empty**: the local content is
+  byte-identical to `origin/main` (the hardening PR landed as #39, `e9c1e15`). There is nothing to
+  reconcile and nothing to lose — `git checkout -- compose.yaml compose.production.yaml` clears the
+  dirty flag with no content change. The runbook still starts with a verification step, but it is a
+  check, not a merge.
+- **The key files already exist on both edges.** `~/stardome-sead/keys/` holds `edge_sign.hex`,
+  `org_sign.hex`, `org_pub.hex`, mode `0400`, owned `syslog:syslog` (100:101), and `.env` already
+  sets `EDGE_SIGNING_KEY_FILE` / `EDGE_ORG_SIGNING_KEY_FILE` / `EDGE_ORG_PUBLIC_KEY_FILE` to them.
+  So the #37 secrets prerequisite is satisfied; the runbook verifies it rather than creating it.
+- **`keys/` is gitignored on `origin/main` but not in the edges' `dcd5fa3` `.gitignore`.** The entry
+  arrived after `dcd5fa3`, so on the current checkout `git status` shows `?? keys/`. After the pull
+  the directory becomes ignored and the untracked marker disappears. The runbook must not treat
+  `?? keys/` as a problem to clean up — deleting it destroys the edge signing key.
+- **No backups exist today.** `~/backups` and `/mnt/data` are absent on both edges, so the backup
+  script is the first one and has nothing to sit alongside.
+- **Updates are manual**: `git pull` then `docker compose -f compose.yaml -f compose.production.yaml
+  up -d`, by hand. No systemd unit, no update script. The migration step therefore has to be an
+  explicit script the operator runs, not something an `up -d` triggers.
 - **Not in scope**: `compose.relay.yaml` (the relay has no databases).
