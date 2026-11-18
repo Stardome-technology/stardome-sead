@@ -31,6 +31,12 @@
 # stop before Docker kills it. edge-service merges the block but sets no restart
 # policy yet.
 #
+# Graceful shutdown: the stateful services (sead-core, edge-service, gateway)
+# drain in-flight work on SIGTERM within a budget that defaults to 20 s
+# (`--drain-budget-ms`). The 30 s `stop_grace_period` is deliberately above
+# that budget so a drain finishes before Docker's SIGKILL; never shrink it to
+# or below the budget, and keep the two numbers in step if either changes.
+#
 # edge-service is in the `edge` profile, so it starts only once the node is
 # enrolled: after enrollment, set `COMPOSE_PROFILES=edge` in `.env` (see
 # `.env.example`), and a plain `docker compose up -d` or `down` includes it.
@@ -44,11 +50,16 @@ x-runtime: &runtime
     options:
       max-size: "10m"
       max-file: "5"
+  # Must stay strictly above the services' default 20 s drain budget
+  # (`--drain-budget-ms`): SIGKILL at 30 s, with 10 s of headroom, so a
+  # drain that uses its whole budget still exits before Docker kills it.
   stop_grace_period: 30s
 
 services:
   sead-core:
     <<: *runtime
+    # Stateful: inherits the 30 s stop_grace_period from x-runtime, above its
+    # 20 s default drain budget (--drain-budget-ms) — drains before SIGKILL.
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
       - sead_data:/data
@@ -67,6 +78,8 @@ services:
 
   edge-service:
     <<: *runtime
+    # Stateful: inherits the 30 s stop_grace_period from x-runtime, above its
+    # 20 s default drain budget (--drain-budget-ms) — drains before SIGKILL.
     # No restart policy yet: a later change enables it, once edge-service's
     # image saves the edge signer's key index.
     restart: "no"
@@ -268,6 +281,8 @@ services:
 
   gateway:
     <<: *runtime
+    # Stateful: inherits the 30 s stop_grace_period from x-runtime, above its
+    # 20 s default drain budget (--drain-budget-ms) — drains before SIGKILL.
     ports:
       - "30080:30080"
     volumes:

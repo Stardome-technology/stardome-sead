@@ -16,6 +16,10 @@
 # Limits: every service gets 256 MiB of memory, half a CPU and 256 processes;
 # edge-service gets 512 MiB. They are sized for 1-vCPU, 2 GiB hosts; raise them
 # in proportion on larger hosts.
+#
+# Grace period: `stop_grace_period` is set once in compose.yaml's `x-runtime`
+# (30 s, above the services' 20 s default drain budget `--drain-budget-ms`) and
+# is inherited here unchanged; this overlay must not override it below the budget.
 
 x-hardening: &hardening
   cap_drop: [ALL]
