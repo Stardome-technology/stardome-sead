@@ -22,11 +22,30 @@
 #   - Fails closed: every pre-flight problem is a hard error with a clear
 #     message; any failure during the copy phase aborts BEFORE the rename,
 #     leaving the source volume intact (task 2.5).
+#
+# Fail-closed contract (task 2.5) — why no code path can reach the rename
+# with a failed or unverified check:
+#   1. `set -euo pipefail` makes any unhandled command failure fatal; every
+#      check additionally uses the explicit fail() helper (exit 1 + message),
+#      so every failure path exits non-zero.
+#   2. main() runs the steps in strict order: preflight -> idempotency ->
+#      checkpoint_copy_verify -> preserve_ownership -> rename_migrated_marker.
+#      The rename is the LAST step and is only reached after checkpoint,
+#      copy, integrity_check, row-count compare, chown and stat re-check have
+#      all succeeded for EVERY database (each loop fails on the first bad db).
+#   3. The only early `exit 0` paths are --dry-run and the idempotency no-op,
+#      both before any mutation; idempotency refuses to conclude "already
+#      migrated" if the source mountpoint cannot be resolved.
+#   4. The EXIT trap prints the ABORT notice for any failure in the window
+#      between the last pre-rename check and the rename itself; it is
+#      disarmed before rename_migrated_marker so the "source left intact"
+#      message is only ever printed while that is still true.
 #   - This script never creates and never removes volumes. Destination
 #     volumes must already exist (`docker volume create`, see the runbook).
 #
-# Status: tasks 2.2 (checkpoint + copy + verify), 2.3 (rename marker) and
-# 2.4 (ownership preservation) are implemented. main() runs end-to-end.
+# Status: tasks 2.2 (checkpoint + copy + verify), 2.3 (rename marker),
+# 2.4 (ownership preservation) and 2.5 (fail-closed contract, documented and
+# harness-verified) are implemented. main() runs end-to-end.
 set -euo pipefail
 
 PROJECT="stardome-sead"
@@ -143,6 +162,9 @@ idempotency_check() {
   # edge destination already holds an edge.db also counts as migrated.
   local src_mp dest_edge
   src_mp="$(volume_mountpoint "$SRC_VOL")"
+  # Fail closed: an unresolvable source mountpoint must NOT be mistaken for
+  # "no edge.db here, destination has one => already migrated" (task 2.5).
+  [ -n "$src_mp" ] || fail "cannot resolve mountpoint of '${SRC_VOL}' during idempotency check"
   dest_edge="$(volume_mountpoint "${PROJECT}_edge_data")"
   if [ -f "${src_mp}/edge.db.migrated" ]; then
     note "already migrated (found ${SRC_VOL}/edge.db.migrated); nothing to do"
@@ -313,17 +335,19 @@ main() {
     exit 0
   fi
 
-  # Task 2.5 extension point (fail-closed abort): the rename is the LAST
-  # step; any failure from here on exits with the source untouched. The trap
-  # is on EXIT, not ERR, because fail() exits explicitly and `exit` does not
-  # trigger the ERR trap.
+  # Task 2.5 (fail-closed abort): the rename is the LAST step; any failure
+  # before it exits non-zero with the source untouched. The trap is on EXIT,
+  # not ERR, because fail() exits explicitly and `exit` does not trigger the
+  # ERR trap. It is disarmed BEFORE the rename so the "source left intact"
+  # notice is only printed while that is still guaranteed (a failure inside
+  # rename_migrated_marker has its own precise ERROR from fail()).
   trap 'echo "ABORT: failure before the rename; source volume left intact (task 2.5)" >&2' EXIT
 
   checkpoint_copy_verify   # task 2.2
   preserve_ownership       # task 2.4
-  rename_migrated_marker   # task 2.3 — last destructive-ish step (rename only)
 
   trap - EXIT
+  rename_migrated_marker   # task 2.3 — last destructive-ish step (rename only)
   note "migration complete"
 }
 
