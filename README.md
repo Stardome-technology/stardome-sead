@@ -374,7 +374,8 @@ Exceptions:
   `restart: "no"` until its image saves the edge signer's key index;
 - the `local` log driver, keeping at most five 10 MB files per container;
 - `stop_grace_period: 30s`, so `docker compose stop` sends each service
-  `SIGTERM` and kills it only after 30 s.
+  `SIGTERM` and kills it only after 30 s
+  (see [Graceful shutdown and drain budget](#graceful-shutdown-and-drain-budget)).
 
 Its health checks give sead-core, pin-service and source-data-service a 30 s
 `start_period`, edge-service 60 s and the gateway 10 s, during which a failed
@@ -386,6 +387,32 @@ is enrolled and `COMPOSE_PROFILES=edge` is set in `.env`
 node sets `COMPOSE_PROFILES=edge` in its `.env` before it deploys this
 version.** Without it, a `docker compose down` leaves a running edge-service
 orphaned, and a later `up -d` keeps its old image and environment.
+
+### Graceful shutdown and drain budget
+
+The stateful services — sead-core, edge-service and the gateway — share one
+shutdown contract. On `SIGTERM` each stops accepting new work, drains
+in-flight work, checkpoints its state (SQLite WAL), and exits. The drain is
+bounded by a **drain budget**: the flag `--drain-budget-ms`, default `20000`
+(20 s), interpreted identically by all three services. A drain or checkpoint
+that cannot finish within the budget exits non-zero by design — the service
+gives up on its own terms; it never waits to be killed.
+
+`stop_grace_period` is Docker's timer, a different mechanism: `docker compose
+stop` sends `SIGTERM` and sends `SIGKILL` when the grace period elapses. It is
+set once, in `compose.yaml`'s `x-runtime` anchor (`30s`), and inherited by
+every service; overlays must not override it.
+
+The relationship between the two is an invariant: **the drain budget must stay
+strictly below `stop_grace_period`.** With the default budget the grace period
+leaves 10 s of headroom, so Docker's `SIGKILL` never truncates a drain or
+checkpoint that is still inside its budget — a clean `docker stop` is always
+the service's own exit, never a kill. The two numbers exist for different
+reasons: the budget bounds the service's graceful exit, the grace period
+bounds Docker's patience; only their ordering makes `docker stop` safe. If you
+raise `--drain-budget-ms` (e.g. in an overlay), raise `stop_grace_period`
+above the new budget too; never shrink the grace period to at or below the
+budget.
 
 ### Start
 
