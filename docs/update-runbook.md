@@ -199,7 +199,8 @@ paper over the error.
   into `BACKUP_ROOT` (default `/var/backups/sead`, one timestamped
   subdirectory per run) and verifies each copy. It **excludes `edge.db` by
   construction** — restoring a stale `edge.db` is silent forgery, so no
-  routine backup may contain it.
+  routine backup may contain it. Full backup documentation:
+  [backup-runbook.md](backup-runbook.md).
 - **Orphan cleanup (optional, manual):** per design D8 nothing automatic ever
   removes volumes. Once the migration is verified, any leftover stale volume
   (e.g. a pre-existing orphan holding only a 0-byte database) can be removed
