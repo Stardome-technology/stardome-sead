@@ -31,11 +31,23 @@
 # refused.
 #
 # Status: task 3.1 (skeleton: explicit db list, CLI, pre-flight, --dry-run)
-# is implemented. Tasks 3.2 (checkpoint + integrity_check on the copy),
-# 3.3 (host destination directory, timestamped) and 3.4 (explicit refusal
-# guard if edge.db ever enters the list) are separate upcoming tasks; their
-# steps are extension points below that REFUSE to run until implemented, so
-# this skeleton can never produce a half-baked backup.
+# and task 3.2 (checkpoint + copy + integrity_check on the copy) are
+# implemented. Tasks 3.3 (host destination directory, timestamped) and 3.4
+# (explicit refusal guard if edge.db ever enters the list) are separate
+# upcoming tasks; their steps are extension points below that REFUSE to run
+# until implemented, so this script can never produce a half-baked backup.
+#
+# Task 3.2 mechanism (D5): unlike the migration, the backup runs against a
+# LIVE stack, so a plain `cp` could tear mid-write. Each database is first
+# checkpointed (`PRAGMA wal_checkpoint(TRUNCATE)`; a busy reply is TOLERATED
+# and noted — the stack is running by design, unlike migrate_volumes.sh
+# where busy is fatal), then snapshotted with the SQLite Online Backup API
+# (`sqlite3 .backup`), which yields a consistent single-file snapshot even
+# under concurrent writers (no -wal/-shm sidecars in the backup). The copy
+# must then pass `PRAGMA integrity_check` == `ok` or the script aborts fail
+# closed: non-zero exit, the unverified partial copy is removed, and the
+# source is left untouched (the checkpoint only folds the WAL into the
+# source db, which is a safe, intended maintenance op).
 set -euo pipefail
 
 PROJECT="stardome-sead"
@@ -52,6 +64,12 @@ declare -A SRC_FOR=(
 # D6: default destination root (host directory, outside the repo and
 # outside Docker's volume tree). Made configurable + timestamped in task 3.3.
 BACKUP_ROOT="/var/backups/sead"
+# Production services run as `user: "100:101"` (syslog:syslog) — same
+# convention as migrate_volumes.sh task 2.4. Task 3.2 uses this ONLY to
+# re-own -wal/-shm sidecars that a checkpoint may create as root (see
+# backup_one_db); the backup copies themselves are plain snapshot files.
+OWN_UID=100
+OWN_GID=101
 
 DRY_RUN=0
 
@@ -117,10 +135,10 @@ print_plan() {
   note "backup plan (per-service volumes -> host directory ${BACKUP_ROOT}):"
   echo "  databases (explicit list, never a glob — D5): ${DB_FILES[*]}"
   echo "  edge.db is NOT in the list and is never backed up (D5)"
-  echo "  per database (task 3.2, not yet implemented):"
-  echo "    PRAGMA wal_checkpoint(TRUNCATE) on the source db"
-  echo "    copy <db> (+ sidecars) to the destination"
-  echo "    PRAGMA integrity_check on the copy"
+  echo "  per database (task 3.2, implemented):"
+  echo "    PRAGMA wal_checkpoint(TRUNCATE) on the source db (busy tolerated — live stack)"
+  echo "    consistent snapshot copy via the SQLite Online Backup API (sqlite3 .backup)"
+  echo "    PRAGMA integrity_check on the copy; anything but 'ok' aborts fail closed"
   echo "  destination (task 3.3, not yet implemented):"
   echo "    timestamped subdirectory under ${BACKUP_ROOT} (configurable)"
   echo "  guard (task 3.4, not yet implemented):"
@@ -128,8 +146,8 @@ print_plan() {
 }
 
 # ---------------------------------------------------------------------------
-# Extension points (tasks 3.2-3.4). Each refuses to run until implemented so
-# the skeleton can never half-back-up.
+# Task 3.2 (implemented): checkpoint + copy + integrity_check.
+# Extension points for tasks 3.3/3.4 below still refuse to run.
 # ---------------------------------------------------------------------------
 
 guard_edge_exclusion() {
@@ -139,11 +157,100 @@ guard_edge_exclusion() {
   fail "backup step not implemented: guard_edge_exclusion arrives with task 3.4"
 }
 
+resolve_destination() {
+  # Task 3.3: timestamped subdirectory under ${BACKUP_ROOT} (configurable).
+  # Not implemented yet — until then the script refuses to write anything,
+  # so a half-configured backup destination can never be produced.
+  fail "backup step not implemented: timestamped host destination arrives with task 3.3"
+}
+
+backup_one_db() {
+  # Task 3.2 (D5): for one database — checkpoint the source, take a
+  # consistent snapshot into dest_dir, verify the copy with
+  # PRAGMA integrity_check. Fail closed on any problem: non-zero exit,
+  # partial copy removed, source untouched.
+  #   $1 db        database file name (from the explicit DB_FILES list)
+  #   $2 src_mp    mountpoint of the per-service volume holding the db
+  #   $3 dest_dir  directory to write the snapshot into
+  local db="$1" src_mp="$2" dest_dir="$3"
+  local src="${src_mp}/${db}" dest="${dest_dir}/${db}"
+  local out rc ext had_sidecar
+
+  [ -f "$src" ] || fail "database '${db}' not found at ${src}"
+  [ -s "$src" ] || fail "database '${db}' at ${src} is 0 bytes; refusing to back it up (design D8)"
+  [ -d "$dest_dir" ] || fail "backup destination directory '${dest_dir}' does not exist"
+
+  # 1. Checkpoint the WAL into the main file. The stack is LIVE by design
+  #    (unlike the migration), so a busy reply is tolerated and noted — the
+  #    snapshot in step 2 is consistent regardless. A hard sqlite3 error is
+  #    NOT tolerated: it means the source db is broken -> fail closed.
+  #    Note which sidecars exist first: if the checkpoint (run as root)
+  #    creates -wal/-shm that were absent, they would be root-owned and the
+  #    100:101 services could not use them afterwards.
+  had_sidecar=("$([ -e "${src}-wal" ] && echo wal || true)" "$([ -e "${src}-shm" ] && echo shm || true)")
+  rc=0
+  out="$(sqlite3 "$src" "PRAGMA wal_checkpoint(TRUNCATE);" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "wal_checkpoint(TRUNCATE) on '${db}' (${src}) failed: ${out}"
+  elif [ "${out%%|*}" != "0" ]; then
+    note "checkpoint: '${db}' WAL busy (${out}); tolerated — the snapshot below is consistent under concurrent writers"
+  fi
+  if [ "$(id -u)" -eq 0 ]; then
+    # Re-own sidecars this checkpoint created (only possible as root, and
+    # only a hazard when running as root against the production layout).
+    # had_sidecar[0] tracks -wal, had_sidecar[1] tracks -shm — index by
+    # position so a missing -wal cannot shift -shm into the wrong slot.
+    local i
+    for i in 0 1; do
+      case "$i" in 0) ext="-wal" ;; 1) ext="-shm" ;; esac
+      [ -e "${src}${ext}" ] || continue
+      case "${had_sidecar[$i]}" in
+        wal|shm) ;;  # existed before the checkpoint — ownership unchanged
+        *) chown "${OWN_UID}:${OWN_GID}" "${src}${ext}" \
+             || fail "chown ${OWN_UID}:${OWN_GID} on checkpoint-created ${src}${ext} failed"
+           note "re-owned checkpoint-created '${db}${ext}' to ${OWN_UID}:${OWN_GID}" ;;
+      esac
+    done
+  fi
+
+  # 2. Consistent snapshot via the SQLite Online Backup API. Unlike `cp`,
+  #    this is safe against concurrent writers (the whole point of running
+  #    backups on a live stack) and produces a single self-contained file —
+  #    no -wal/-shm sidecars to keep in sync in the backup set.
+  #    Overwriting an existing snapshot is intentional: re-runs converge.
+  rc=0
+  out="$(sqlite3 "$src" ".backup ${dest}" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$dest"
+    fail "snapshot copy of '${db}' to '${dest}' failed: ${out}"
+  fi
+  if [ ! -s "$dest" ]; then
+    rm -f "$dest"
+    fail "snapshot copy '${dest}' is missing or 0 bytes; aborting (no unverified backup left behind)"
+  fi
+
+  # 3. Verify the copy: integrity_check must print exactly 'ok'.
+  #    (`|| true` so a non-zero sqlite3 exit lands in $out and the explicit
+  #    check below reports it, instead of set -e aborting silently.)
+  out="$(sqlite3 "$dest" "PRAGMA integrity_check;" 2>&1)" || true
+  if [ "$out" != "ok" ]; then
+    rm -f "$dest"
+    fail "integrity_check on backup copy '${dest}' failed: ${out} (source untouched; unverified copy removed)"
+  fi
+  note "verified backup copy of '${db}': integrity_check ok (${dest})"
+}
+
 backup_databases() {
-  # Task 3.2 (checkpoint + copy + integrity_check) and task 3.3 (host
-  # directory, timestamped) land here. Until then this refuses so the
-  # script can never write an unverified backup.
-  fail "backup step not implemented: checkpoint + copy + integrity_check arrive with task 3.2, timestamped host destination with task 3.3"
+  # Task 3.2 loop over the explicit list. The destination itself is a task
+  # 3.3 extension point and refuses until implemented.
+  local dest db src_mp
+  dest="$(resolve_destination)"   # task 3.3 — refuses until implemented
+  for db in "${DB_FILES[@]}"; do
+    src_mp="$(volume_mountpoint "${SRC_FOR[$db]}")"
+    [ -n "$src_mp" ] || fail "cannot resolve mountpoint of '${SRC_FOR[$db]}'"
+    note "backing up '${db}': ${SRC_FOR[$db]} -> ${dest}"
+    backup_one_db "$db" "$src_mp" "$dest"
+  done
 }
 
 main() {
@@ -160,4 +267,8 @@ main() {
   note "backup complete"
 }
 
-main "$@"
+# Run main only when executed, not when sourced — lets the test harness
+# source the script and drive backup_one_db directly (task 3.2 verification).
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
