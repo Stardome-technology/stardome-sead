@@ -25,9 +25,9 @@
 #   - This script never creates and never removes volumes. Destination
 #     volumes must already exist (`docker volume create`, see the runbook).
 #
-# Status: task 2.2 (checkpoint + copy + verify) is implemented. The
-# ownership-preservation and rename steps remain marked extension points for
-# tasks 2.3-2.4 and refuse to run rather than doing nothing silently.
+# Status: tasks 2.2 (checkpoint + copy + verify) and 2.3 (rename marker) are
+# implemented. The ownership-preservation step remains a marked extension
+# point for task 2.4 and refuses to run rather than doing nothing silently.
 set -euo pipefail
 
 PROJECT="stardome-sead"
@@ -159,7 +159,7 @@ print_plan() {
   echo "      copy <db>, <db>-wal, <db>-shm to its destination volume"
   echo "      PRAGMA integrity_check + per-table row counts on the copy"
   echo "  preserve ownership 100:101 on the copies (task 2.4)"
-  echo "  rename ${SRC_VOL}/edge.db -> edge.db.migrated (task 2.3, D2: rename, never delete)"
+  echo "  rename ${SRC_VOL}/edge.db -> edge.db.migrated (implemented; D2: rename, never delete)"
   echo "  abort before the rename on any verification failure (task 2.5, D4)"
   echo "  never remove any volume (D8); orphan ${PROJECT}_pin_data is documented, not touched"
 }
@@ -247,10 +247,35 @@ preserve_ownership() {
 }
 
 rename_migrated_marker() {
-  # TASK 2.3 extension point: rename ${SRC_VOL}/edge.db -> edge.db.migrated
-  # (D2: rename, never delete). Must run ONLY after checkpoint_copy_verify
-  # and preserve_ownership succeeded.
-  fail "rename step (task 2.3) is not implemented yet"
+  # Task 2.3 (D2): rename ${SRC_VOL}/edge.db -> edge.db.migrated. Reaching
+  # this function means checkpoint_copy_verify (and preserve_ownership)
+  # already succeeded for ALL databases — checkpoint_copy_verify fails closed
+  # on the first bad copy, so a rename can never follow an unverified copy.
+  # Rename, never delete (D2).
+  local src_mp ext
+  src_mp="$(volume_mountpoint "$SRC_VOL")"
+  if [ ! -f "${src_mp}/edge.db" ] && [ -f "${src_mp}/edge.db.migrated" ]; then
+    note "rename: edge.db already renamed (edge.db.migrated present); no-op"
+    return 0
+  fi
+  [ -f "${src_mp}/edge.db" ] \
+    || fail "cannot rename ${SRC_VOL}/edge.db: source file not found (unexpected source layout)"
+  mv "${src_mp}/edge.db" "${src_mp}/edge.db.migrated" \
+    || fail "renaming ${SRC_VOL}/edge.db -> edge.db.migrated failed"
+  note "renamed ${SRC_VOL}/edge.db -> edge.db.migrated (D2: rename, never delete)"
+  # Sidecars: the WAL was checkpointed with TRUNCATE before the copy, so
+  # edge.db-wal holds no committed data and -shm is transient shared-memory
+  # state. The spec names only edge.db, but a stale edge.db-wal left behind
+  # would be replayed by SQLite onto any edge.db recreated in the source
+  # volume later — rename them alongside (judgment call; still rename,
+  # never delete).
+  for ext in -wal -shm; do
+    if [ -f "${src_mp}/edge.db${ext}" ]; then
+      mv "${src_mp}/edge.db${ext}" "${src_mp}/edge.db${ext}.migrated" \
+        || fail "renaming ${SRC_VOL}/edge.db${ext} sidecar failed"
+      note "renamed ${SRC_VOL}/edge.db${ext} -> edge.db${ext}.migrated"
+    fi
+  done
 }
 
 main() {
