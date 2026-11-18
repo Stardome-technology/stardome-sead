@@ -297,6 +297,14 @@ services:
 volumes:
   sead_core_data:
   edge_data:
+    # Holds the edge XMSS key index (edge.db). External with a fixed name so
+    # Compose never creates or removes it: on a node that has not run the
+    # migration, `up` fails naming the missing volume instead of starting
+    # edge-service on an empty index. The name matches the project-prefixed
+    # name the other volumes get, so it is created explicitly with
+    # `docker volume create stardome-sead_edge_data`.
+    external: true
+    name: stardome-sead_edge_data
   pin_data:
   sourcedata_data:
 
