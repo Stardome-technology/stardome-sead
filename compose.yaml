@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
-      - sead_data:/data
+      - sead_core_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=sead-core
@@ -48,7 +48,7 @@ services:
   edge-service:
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
-      - sead_data:/data
+      - edge_data:/data
     # The three keys come from host files as Compose secrets (top-level
     # `secrets:` below), mounted under /run/secrets/ and passed by path, so no
     # key appears in the container's command, arguments or environment.
@@ -130,7 +130,7 @@ services:
     # No public ports — gRPC-only, sole storage authority (AddToIPFS,
     # RetrieveFromIPFS, ResolveCIDByPayloadHash); reachable on sead-network.
     volumes:
-      - sead_data:/data
+      - pin_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=pin-service
@@ -149,7 +149,7 @@ services:
   source-data-service:
     # No public ports — gRPC-only, reachable on sead-network via the gateway
     volumes:
-      - sead_data:/data
+      - sourcedata_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=source-data-service
@@ -295,7 +295,10 @@ services:
       - sead-network
 
 volumes:
-  sead_data:
+  sead_core_data:
+  edge_data:
+  pin_data:
+  sourcedata_data:
 
 # edge-service's keys, each a host file holding the key as bare hex on one line
 # (no `KEY=` prefix), at mode 0400, owned by 100:101 (edge-service's `sead`
