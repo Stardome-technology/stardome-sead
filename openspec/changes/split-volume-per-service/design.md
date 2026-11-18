@@ -121,6 +121,20 @@ exist invites them to discard something else. Verify first, then act on what is 
   the entry arrived after `dcd5fa3`, so the current checkout shows the directory as untracked.
   After the pull it becomes ignored. Deleting it destroys the edge signing key.
 
+### D8 — The orphan `stardome-sead_pin_data` volume is documented, not removed
+
+The migration does **not** remove the orphan volume; it is documented as unused. Rationale:
+
+1. The migration's safety property is "leave old files recoverable-but-poisoned rather than
+   deleted" (D2). A script that auto-deletes a volume contradicts that principle, even for a
+   0-byte volume.
+2. The volume holds only a 0-byte `pin-service.db` (Context fact 2) — worthless to preserve, but
+   not worth a destructive step in a script whose whole design is non-destructive.
+3. Removal is a one-line manual operator cleanup (`docker volume rm stardome-sead_pin_data`
+   after the migration is verified); baking it into the migration adds risk for no benefit.
+4. The real hazard is someone "restoring" from the 0-byte database — that is fixed by
+   documentation, not deletion.
+
 ## Risks / Trade-offs
 
 - **The migration touches the only copy of the key index.** Mitigation: D2 (rename, not delete), D3
@@ -129,8 +143,9 @@ exist invites them to discard something else. Verify first, then act on what is 
   but it must be in the install docs, or a first-time deployment fails confusingly.
 - **Per-service volumes multiply the things to back up.** Mitigated by D5's explicit list and one
   script.
-- **The orphan `pin_data` volume.** Decide explicitly: remove it, or document it as unused. Leaving it
-  undocumented invites someone to "restore" from a 0-byte database.
+- **The orphan `pin_data` volume.** Decided: documented as unused, not removed by the migration
+  (D8). Leaving it undocumented invites someone to "restore" from a 0-byte database — the
+  documentation in D8 and the Migration section is the mitigation.
 
 ## Migration
 
@@ -144,9 +159,11 @@ exist invites them to discard something else. Verify first, then act on what is 
 6. `up -d`.
 7. Verify: row counts per table match, `PRAGMA integrity_check` is `ok`, edge-service is healthy and
    its next signature uses an index greater than the last one before the migration.
+8. Runbook note (D8): state that `stardome-sead_pin_data` is a stale orphan containing a 0-byte
+   `pin-service.db`, must never be used as a restore source, and may be removed manually
+   (`docker volume rm stardome-sead_pin_data`) after the migration is verified.
 
 ## Open Questions
 
-- Should the orphan `pin_data` volume be removed by the migration, or left and documented?
 - Does the backup need to run on a schedule (cron/systemd timer), or is manual invocation enough for
   now? There is no scheduler on the edges today.
