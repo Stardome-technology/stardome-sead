@@ -53,8 +53,8 @@ services:
     image: ghcr.io/stardome-technology/stardome-sead/pin-service:0.1.0@sha256:8b9d0fab7e2f441a05126dafa0b3c9364177e237d46ff49a3c71ad26586263f6
     <<: *hardening
     # No `user:`: from v0.1.0 the image runs as 10001:10001, like every other
-    # service, and writes its CID-tracker SQLite DB into the shared
-    # `sead_data` volume, which must belong to that user. A node set up with
+    # service, and writes its CID-tracker SQLite DB into its own `pin_data`
+    # volume, which must belong to that user. A node set up with
     # older images runs scripts/migrate-sead-ownership.sh once, with the stack
     # stopped, when it switches to v0.1.0 (see the README, "Moving a node to
     # the v0.1.0 user").

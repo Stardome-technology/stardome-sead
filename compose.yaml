@@ -14,8 +14,12 @@
 #
 # The project name is pinned to `stardome-sead`, the name Compose derived from
 # the clone's directory before this file existed. Changing it orphans the
-# `stardome-sead_sead_data` volume, which holds the XMSS key indices in
-# `edge.db`: a new volume resets them and forces a key rotation.
+# project-scoped volumes (`sead_core_data`, `pin_data`, `sourcedata_data`).
+# The XMSS key indices live in `edge.db` on the `edge_data` volume, which is
+# `external` with the fixed name `stardome-sead_edge_data` and therefore
+# survives a project-name change — that is exactly why it was made external.
+# Losing `edge.db` or restoring a stale copy still resets the indices and
+# forces an edge key rotation.
 #
 # Go Gateway migration (phase 4.4): the C++ services (sead-core, edge-service,
 # pin-service, source-data-service, sead-sync) are gRPC-only and publish no
