@@ -30,12 +30,24 @@
 # pin-service.db in pin_data is the documented orphan (D8) and is also
 # refused.
 #
-# Status: task 3.1 (skeleton: explicit db list, CLI, pre-flight, --dry-run)
-# and task 3.2 (checkpoint + copy + integrity_check on the copy) are
-# implemented. Tasks 3.3 (host destination directory, timestamped) and 3.4
-# (explicit refusal guard if edge.db ever enters the list) are separate
-# upcoming tasks; their steps are extension points below that REFUSE to run
+# Status: task 3.1 (skeleton: explicit db list, CLI, pre-flight, --dry-run),
+# task 3.2 (checkpoint + copy + integrity_check on the copy) and task 3.3
+# (timestamped host destination directory) are implemented. Task 3.4
+# (explicit refusal guard if edge.db ever enters the list) is a separate
+# upcoming task; its step is an extension point below that REFUSES to run
 # until implemented, so this script can never produce a half-baked backup.
+#
+# Task 3.3 destination scheme (D6): each backup run writes into its own
+# timestamped subdirectory  ${BACKUP_ROOT}/<UTC timestamp>  where
+#   BACKUP_ROOT  host directory, default /var/backups/sead, overridable via
+#                the BACKUP_ROOT environment variable (must be absolute),
+#                e.g.  BACKUP_ROOT=/mnt/usb/backups scripts/backup_databases.sh
+#   <timestamp>  date -u +%Y%m%dT%H%M%SZ  (UTC, sortable, e.g. 20261118T061057Z)
+# UTC is used deliberately: local-time stamps are ambiguous across DST and
+# non-unique after a clock change, which could merge two runs' snapshots.
+# The directory is created with mkdir -p (parents included) before any
+# database is touched; if creation fails the script aborts fail closed with
+# nothing written. --dry-run never creates the destination.
 #
 # Task 3.2 mechanism (D5): unlike the migration, the backup runs against a
 # LIVE stack, so a plain `cp` could tear mid-write. Each database is first
@@ -61,9 +73,10 @@ declare -A SRC_FOR=(
   [sourcedata.db]="${PROJECT}_sourcedata_data"
   [pin-service.db]="${PROJECT}_pin_data"
 )
-# D6: default destination root (host directory, outside the repo and
-# outside Docker's volume tree). Made configurable + timestamped in task 3.3.
-BACKUP_ROOT="/var/backups/sead"
+# D6: destination root (host directory, outside the repo and outside
+# Docker's volume tree). Configurable via the BACKUP_ROOT environment
+# variable; each run writes into a timestamped subdirectory of it (3.3).
+BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/sead}"
 # Production services run as `user: "100:101"` (syslog:syslog) — same
 # convention as migrate_volumes.sh task 2.4. Task 3.2 uses this ONLY to
 # re-own -wal/-shm sidecars that a checkpoint may create as root (see
@@ -85,7 +98,8 @@ restoring a stale edge key index would cause silent XMSS leaf reuse).
   -h, --help  show this help and exit.
 
 Databases are read from their per-service volumes (sead_core_data,
-sourcedata_data, pin_data). Destination: /var/backups/sead (host dir).
+sourcedata_data, pin_data). Destination: a timestamped subdirectory of
+/var/backups/sead (host dir; override the root with BACKUP_ROOT=...).
 See the header of this file and
 openspec/changes/split-volume-per-service/design.md for the safety rules.
 EOF
@@ -139,8 +153,8 @@ print_plan() {
   echo "    PRAGMA wal_checkpoint(TRUNCATE) on the source db (busy tolerated — live stack)"
   echo "    consistent snapshot copy via the SQLite Online Backup API (sqlite3 .backup)"
   echo "    PRAGMA integrity_check on the copy; anything but 'ok' aborts fail closed"
-  echo "  destination (task 3.3, not yet implemented):"
-  echo "    timestamped subdirectory under ${BACKUP_ROOT} (configurable)"
+  echo "  destination (task 3.3, implemented):"
+  echo "    ${BACKUP_ROOT}/<UTC timestamp YYYYmmddTHHMMSSZ> (root configurable via BACKUP_ROOT)"
   echo "  guard (task 3.4, not yet implemented):"
   echo "    refuse to run if edge.db ever appears in the database list"
 }
@@ -158,10 +172,21 @@ guard_edge_exclusion() {
 }
 
 resolve_destination() {
-  # Task 3.3: timestamped subdirectory under ${BACKUP_ROOT} (configurable).
-  # Not implemented yet — until then the script refuses to write anything,
-  # so a half-configured backup destination can never be produced.
-  fail "backup step not implemented: timestamped host destination arrives with task 3.3"
+  # Task 3.3 (D6): create this run's timestamped destination directory under
+  # ${BACKUP_ROOT} and echo it. Fail closed if the root is not absolute or
+  # the directory cannot be created — nothing is written before this returns.
+  # Progress lines go to stderr so stdout carries only the destination path.
+  case "${BACKUP_ROOT}" in
+    /*) ;;
+    *) fail "BACKUP_ROOT must be an absolute host directory (got '${BACKUP_ROOT}')" ;;
+  esac
+  local ts dest
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  dest="${BACKUP_ROOT}/${ts}"
+  mkdir -p "$dest" 2>/dev/null \
+    || fail "cannot create backup destination '${dest}' (check permissions on '${BACKUP_ROOT}')"
+  echo "==> backup destination: ${dest}" >&2
+  echo "$dest"
 }
 
 backup_one_db() {
@@ -241,10 +266,11 @@ backup_one_db() {
 }
 
 backup_databases() {
-  # Task 3.2 loop over the explicit list. The destination itself is a task
-  # 3.3 extension point and refuses until implemented.
+  # Task 3.2 loop over the explicit list; destination resolved by task 3.3
+  # (timestamped dir under ${BACKUP_ROOT}). A fail inside resolve_destination
+  # exits via the bare assignment + set -e before any db is touched.
   local dest db src_mp
-  dest="$(resolve_destination)"   # task 3.3 — refuses until implemented
+  dest="$(resolve_destination)"   # task 3.3 — fails closed if unusable
   for db in "${DB_FILES[@]}"; do
     src_mp="$(volume_mountpoint "${SRC_FOR[$db]}")"
     [ -n "$src_mp" ] || fail "cannot resolve mountpoint of '${SRC_FOR[$db]}'"
