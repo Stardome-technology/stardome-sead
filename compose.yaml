@@ -57,7 +57,7 @@ services:
     <<: *runtime
     # No public ports — gRPC-only, on `backend` only, reached via the gateway
     volumes:
-      - sead_data:/data
+      - sead_core_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=sead-core
@@ -80,7 +80,7 @@ services:
     profiles: [edge]
     # No public ports — gRPC-only, on `backend` only, reached via the gateway
     volumes:
-      - sead_data:/data
+      - edge_data:/data
     # The three keys come from host files as Compose secrets (top-level
     # `secrets:` below), mounted under /run/secrets/ and passed by path, so no
     # key appears in the container's command, arguments or environment.
@@ -167,7 +167,7 @@ services:
     # RetrieveFromIPFS, ResolveCIDByPayloadHash); reached on `backend`, and on
     # `public` too, since it connects out to the IPFS API.
     volumes:
-      - sead_data:/data
+      - pin_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=pin-service
@@ -189,7 +189,7 @@ services:
     <<: *runtime
     # No public ports — gRPC-only, on `backend` only, reached via the gateway
     volumes:
-      - sead_data:/data
+      - sourcedata_data:/data
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=source-data-service
@@ -357,7 +357,10 @@ services:
       - backend
 
 volumes:
-  sead_data:
+  sead_core_data:
+  edge_data:
+  pin_data:
+  sourcedata_data:
 
 # edge-service's keys, each a host file holding the key as bare hex on one line
 # (no `KEY=` prefix), at mode 0400, owned by 10001:10001 (edge-service's
