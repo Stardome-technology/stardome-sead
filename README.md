@@ -650,6 +650,21 @@ To bump an image to a new release `X.Y.Z`:
 
 ### Start
 
+**On a fresh node, create the external `edge_data` volume once before the
+first `up`.** It is declared `external: true` in `compose.yaml`, so Compose
+never creates it, and `up` fails with "external volume not found" before any
+container starts:
+
+```bash
+docker volume create stardome-sead_edge_data
+```
+
+The command is idempotent — re-running it on an already-deployed node is a
+no-op. Why the volume is external (an empty `edge.db` would make the edge
+sign from spent XMSS leaves, so a missing volume must stop the stack) is
+covered in [Volumes](#volumes); updating an existing node instead of a fresh
+install is [docs/update-runbook.md](docs/update-runbook.md).
+
 Start the stack:
 
 ```bash
