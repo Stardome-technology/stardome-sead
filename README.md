@@ -207,7 +207,9 @@ another's volume:
   volume into this layout: checkpoint, copy, verify (integrity + row counts),
   and only then rename the old `edge.db` to `edge.db.migrated` — nothing is
   deleted, and a rollback fails loudly instead of using stale files. Run it
-  with `--dry-run` first.
+  with `--dry-run` first. The full procedure for updating a deployed node —
+  verify the working tree, pull, stop, create volumes, migrate, verify — is
+  [docs/update-runbook.md](docs/update-runbook.md).
 
 ### Configure
 
