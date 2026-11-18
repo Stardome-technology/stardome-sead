@@ -191,7 +191,9 @@ another's volume:
   `pin-service.db` to a host directory (`BACKUP_ROOT`, default
   `/var/backups/sead`) after a WAL checkpoint and verifies each copy with
   `PRAGMA integrity_check`. It enumerates that explicit list and refuses to
-  touch `edge.db` — by construction, not by convention.
+  touch `edge.db` — by construction, not by convention. What it covers,
+  what it excludes and why, and where it writes:
+  [docs/backup-runbook.md](docs/backup-runbook.md).
 - `scripts/migrate_volumes.sh` moves data off the old shared `sead_data`
   volume into this layout: checkpoint, copy, verify (integrity + row counts),
   and only then rename the old `edge.db` to `edge.db.migrated` — nothing is
