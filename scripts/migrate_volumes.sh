@@ -25,9 +25,9 @@
 #   - This script never creates and never removes volumes. Destination
 #     volumes must already exist (`docker volume create`, see the runbook).
 #
-# Status: skeleton (task 2.1). The copy/verify, ownership-preservation and
-# rename steps are marked extension points for tasks 2.2-2.5 and currently
-# refuse to run rather than doing nothing silently.
+# Status: task 2.2 (checkpoint + copy + verify) is implemented. The
+# ownership-preservation and rename steps remain marked extension points for
+# tasks 2.3-2.4 and refuse to run rather than doing nothing silently.
 set -euo pipefail
 
 PROJECT="stardome-sead"
@@ -40,6 +40,13 @@ DEST_VOLS=(
 )
 # Databases living in the source volume (explicit list, never a glob — D5).
 DB_FILES=(sead.db edge.db pin-service.db sourcedata.db)
+# Which destination volume each database migrates to (design.md D3/D4).
+declare -A DEST_FOR=(
+  [sead.db]="${PROJECT}_sead_core_data"
+  [edge.db]="${PROJECT}_edge_data"
+  [pin-service.db]="${PROJECT}_pin_data"
+  [sourcedata.db]="${PROJECT}_sourcedata_data"
+)
 # Free-space heuristic: require at least this many times the source data size
 # free on every destination filesystem (live state is ~10 MB today).
 FREE_SPACE_MULTIPLIER=2
@@ -146,7 +153,7 @@ idempotency_check() {
 
 print_plan() {
   note "migration plan (source ${SRC_VOL} -> per-service volumes):"
-  echo "  checkpoint WAL + copy + verify (task 2.2, D3):"
+  echo "  checkpoint WAL + copy + verify (D3, implemented):"
   echo "    for each of ${DB_FILES[*]}:"
   echo "      PRAGMA wal_checkpoint(TRUNCATE) on the source db"
   echo "      copy <db>, <db>-wal, <db>-shm to its destination volume"
@@ -162,13 +169,75 @@ print_plan() {
 # the skeleton can never half-migrate.
 # ---------------------------------------------------------------------------
 
+db_table_row_counts() {
+  # Prints "table|count" lines for every user table in a database.
+  local db="$1" t
+  sqlite3 "$db" \
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;" \
+  | while IFS= read -r t; do
+      printf '%s|%s\n' "$t" "$(sqlite3 "$db" "SELECT COUNT(*) FROM \"${t}\";")"
+    done
+}
+
 checkpoint_copy_verify() {
-  # TASK 2.2 extension point: for each database in ${DB_FILES[*]}:
-  #   PRAGMA wal_checkpoint(TRUNCATE) on the source, copy db + -wal + -shm
-  #   together into its destination volume, then PRAGMA integrity_check and
-  #   per-table row counts on the copy vs the source. Any failure must abort
-  #   before rename_migrated_marker() (task 2.5).
-  fail "copy/verify step (task 2.2) is not implemented yet; refusing to run a real migration (--dry-run to validate pre-flight)"
+  # Task 2.2 (D3/D4): for each database — checkpoint the WAL into the source,
+  # copy db + -wal + -shm together into its destination volume, then verify
+  # the copy (integrity_check + per-table row counts vs the source). Any
+  # failure aborts here, BEFORE rename_migrated_marker() (task 2.5), leaving
+  # the source volume intact.
+  local src_mp dest_mp db ext out n src_counts dest_counts
+  src_mp="$(volume_mountpoint "$SRC_VOL")"
+  for db in "${DB_FILES[@]}"; do
+    [ -f "${src_mp}/${db}" ] \
+      || fail "database '${db}' not found in ${SRC_VOL} (${src_mp}); refusing to migrate a source that does not match the expected layout"
+    dest_mp="$(volume_mountpoint "${DEST_FOR[$db]}")"
+    [ -n "$dest_mp" ] || fail "cannot resolve mountpoint of '${DEST_FOR[$db]}'"
+    note "migrating ${db}: ${SRC_VOL} -> ${DEST_FOR[$db]}"
+
+    # 1. Checkpoint the WAL into the main file (D3). The stack is stopped
+    #    (pre-flight), so busy must be 0; a busy reply means someone still
+    #    holds the db open — do not copy under it.
+    out="$(sqlite3 "${src_mp}/${db}" "PRAGMA wal_checkpoint(TRUNCATE);" 2>&1)" \
+      || fail "wal_checkpoint(TRUNCATE) on ${SRC_VOL}/${db} failed: ${out}"
+    if [ "${out%%|*}" != "0" ]; then
+      fail "wal_checkpoint(TRUNCATE) on ${SRC_VOL}/${db} reported busy (${out}); is the stack really stopped?"
+    fi
+
+    # 2. Copy db + -wal + -shm together (D3 belt-and-braces). The checkpoint
+    #    truncates -wal but it is copied anyway; -wal/-shm may be absent.
+    #    Overwriting destination files is intentional: a re-run before the
+    #    rename must converge, and the orphan pin_data volume holds a 0-byte
+    #    pin-service.db that is meant to be replaced (D8).
+    cp -f "${src_mp}/${db}" "${dest_mp}/${db}" \
+      || fail "copying ${db} to ${DEST_FOR[$db]} failed"
+    for ext in -wal -shm; do
+      if [ -f "${src_mp}/${db}${ext}" ]; then
+        cp -f "${src_mp}/${db}${ext}" "${dest_mp}/${db}${ext}" \
+          || fail "copying ${db}${ext} to ${DEST_FOR[$db]} failed"
+      fi
+    done
+
+    # 3. Verify the copy: integrity_check must print exactly 'ok'...
+    #    (`|| true` so a non-zero sqlite3 exit lands in $out and the explicit
+    #    check below reports it, instead of set -e aborting silently.)
+    out="$(sqlite3 "${dest_mp}/${db}" "PRAGMA integrity_check;" 2>&1)" || true
+    if [ "$out" != "ok" ]; then
+      fail "integrity_check on copy ${DEST_FOR[$db]}/${db} failed: ${out}"
+    fi
+
+    # 4. ...and per-table row counts must match the source exactly.
+    src_counts="$(db_table_row_counts "${src_mp}/${db}")"
+    dest_counts="$(db_table_row_counts "${dest_mp}/${db}")"
+    if [ "$src_counts" != "$dest_counts" ]; then
+      fail "row counts differ between ${SRC_VOL}/${db} and ${DEST_FOR[$db]}/${db}:
+--- source ---
+${src_counts}
+--- copy ---
+${dest_counts}"
+    fi
+    n="$(printf '%s\n' "$src_counts" | grep -c . || true)"
+    note "verified ${DEST_FOR[$db]}/${db}: integrity ok, ${n} table(s) row counts match"
+  done
 }
 
 preserve_ownership() {
@@ -185,10 +254,6 @@ rename_migrated_marker() {
 }
 
 main() {
-  # Task 2.5 extension point (fail-closed abort): the rename is the LAST
-  # step; any earlier failure exits here with the source untouched.
-  trap 'echo "ABORT: failure before the rename; source volume left intact (task 2.5)" >&2' ERR
-
   preflight
   idempotency_check
 
@@ -198,11 +263,17 @@ main() {
     exit 0
   fi
 
+  # Task 2.5 extension point (fail-closed abort): the rename is the LAST
+  # step; any failure from here on exits with the source untouched. The trap
+  # is on EXIT, not ERR, because fail() exits explicitly and `exit` does not
+  # trigger the ERR trap.
+  trap 'echo "ABORT: failure before the rename; source volume left intact (task 2.5)" >&2' EXIT
+
   checkpoint_copy_verify   # task 2.2
   preserve_ownership       # task 2.4
   rename_migrated_marker   # task 2.3 — last destructive-ish step (rename only)
 
-  trap - ERR
+  trap - EXIT
   note "migration complete"
 }
 
