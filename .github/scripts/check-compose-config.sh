@@ -13,7 +13,9 @@
 #   2. the resolved config has the top-level `name: stardome-sead`;
 #   3. no resolved value holds a `#`, the sign of a comment read as a value;
 #   4. with each required variable removed, `config --quiet` exits non-zero and
-#      its output names the variable.
+#      its output names the variable;
+#   5. `config --images` lists every image as `<image>:<tag>@sha256:<digest>`,
+#      so no file runs an image by a tag alone.
 # The production pair runs with the `edge` profile, so the checks cover
 # edge-service; a last check confirms that without the profile `config` leaves
 # edge-service out, so a fresh node's `up -d` doesn't start it.
@@ -67,6 +69,21 @@ check() {
     fi
   else
     fail "$label: config exits non-zero"; cat "$out"
+  fi
+
+  if compose "$env_file" "$@" config --images >"$tmp/images" 2>"$out"; then
+    echo "$label: config --images lists:"
+    sed 's/^/  /' "$tmp/images"
+    unpinned="$(grep -Ev '^[^@[:space:]]+:[^@[:space:]]+@sha256:[0-9a-f]{64}$' "$tmp/images")"
+    if [ ! -s "$tmp/images" ]; then
+      fail "$label: config --images lists no image"
+    elif [ -n "$unpinned" ]; then
+      fail "$label: images without a tag and an @sha256: digest: $(printf '%s' "$unpinned" | tr '\n' ' ')"
+    else
+      pass "$label: every image is pinned as <tag>@sha256:<digest>"
+    fi
+  else
+    fail "$label: config --images exits non-zero"; cat "$out"
   fi
 
   for var in $required; do
