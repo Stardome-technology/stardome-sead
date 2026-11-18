@@ -30,21 +30,21 @@ services:
     ports:
       - "31002:31002/tcp"
     volumes:
-      # Bind-mount the identity key DIRECTORY from host to persist PeerID across
-      # restarts and `docker compose down -v` — the relay PeerID is the bootstrap
-      # anchor hardcoded in every POC's GOSSIP_BOOTSTRAP. Mounting a directory
-      # (not a file) avoids Docker auto-creating the source as a directory when
-      # the file doesn't exist yet; gossip-node creates gossip-identity.key inside.
+      # Bind-mount the identity key DIRECTORY from the host, so the PeerId
+      # survives restarts, recreates and `docker compose down -v` — the relay
+      # PeerId is the bootstrap anchor other nodes hardcode in GOSSIP_BOOTSTRAP.
+      # Mounting a directory (not a file) avoids Docker auto-creating the source
+      # as a directory when the file doesn't exist yet; gossip-node creates
+      # gossip-identity.key inside it on first start.
       #
-      # ⚠️ DO NOT change this path (GOSSIP_IDENTITY_DIR). The default
-      # `~/.sead/gossip-keys` is resolved relative to the COMPOSE WORKING
-      # DIRECTORY (where you run `docker compose`), NOT to $HOME. Bringing the
-      # relay up from a different directory expands `~` to a different host path
-      # and gossip-node generates a NEW identity key → the relay PeerID ROTATES,
-      # breaking every POC's GOSSIP_BOOTSTRAP ("peer id mismatch"). Always `cd`
-      # into the same directory before `up -d`, or pin GOSSIP_IDENTITY_DIR to an
-      # absolute path.
-      - ${GOSSIP_IDENTITY_DIR:-~/.sead/gossip-keys}:/data/gossip-keys
+      # GOSSIP_IDENTITY_DIR defaults to the absolute path
+      # /var/lib/sead/gossip-keys, so every user who runs `docker compose`,
+      # root under `sudo` included, mounts the same key. A path that changes
+      # with the user, such as one under `~`, gives gossip-node an empty
+      # directory, where it generates a NEW key: the relay PeerId changes and
+      # every node that dials it fails with "peer id mismatch". To move an
+      # existing key, see the README's section "Gossip identity key".
+      - ${GOSSIP_IDENTITY_DIR:-/var/lib/sead/gossip-keys}:/data/gossip-keys
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SERVICE_NAME=gossip-relay

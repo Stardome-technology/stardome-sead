@@ -65,9 +65,10 @@ services:
   gossip-node:
     image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
     <<: *hardening
-    # No `user:`: gossip-node runs as root and writes its identity key into
-    # the root-owned directory mounted at /data/gossip-keys. A non-root user
-    # couldn't write it, so the PeerId would change on every recreate.
+    # No `user:`: gossip-node runs as root, since its identity key on the
+    # host, mounted from GOSSIP_IDENTITY_DIR at /data/gossip-keys, is owned
+    # root:root at mode 0600. With capabilities dropped, a non-root user
+    # can't read that key: gossip-node exits at start and crash-loops.
     tmpfs:
       - /tmp
       - /run
