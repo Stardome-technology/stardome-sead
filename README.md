@@ -141,6 +141,9 @@ Consequences for operations:
 | `compose.development.yaml` | Overlay that builds the images from local source checkouts (`SEAD_SOURCE_DIR`, `SEAD_GATEWAY_SOURCE_DIR`), logs at debug level and publishes the gRPC ports on `127.0.0.1`; it signs with real XMSS keys like production |
 | `compose.relay.yaml` | Standalone file for a relay-only bootstrap peer (gossip-node alone) |
 
+How the images on ghcr.io are tagged, and which image reference a node pins,
+are set in [docs/image-tags.md](docs/image-tags.md).
+
 All of them set the project name `stardome-sead`, so the `stardome-sead_sead_data`
 volume, and with it the XMSS key indices in `edge.db`, carry over from earlier
 deployments. `.env.example` sets `COMPOSE_FILE=compose.yaml:compose.production.yaml`,
