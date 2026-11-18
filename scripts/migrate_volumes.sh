@@ -25,9 +25,8 @@
 #   - This script never creates and never removes volumes. Destination
 #     volumes must already exist (`docker volume create`, see the runbook).
 #
-# Status: tasks 2.2 (checkpoint + copy + verify) and 2.3 (rename marker) are
-# implemented. The ownership-preservation step remains a marked extension
-# point for task 2.4 and refuses to run rather than doing nothing silently.
+# Status: tasks 2.2 (checkpoint + copy + verify), 2.3 (rename marker) and
+# 2.4 (ownership preservation) are implemented. main() runs end-to-end.
 set -euo pipefail
 
 PROJECT="stardome-sead"
@@ -50,6 +49,10 @@ declare -A DEST_FOR=(
 # Free-space heuristic: require at least this many times the source data size
 # free on every destination filesystem (live state is ~10 MB today).
 FREE_SPACE_MULTIPLIER=2
+# Ownership of the migrated files (task 2.4): production services run as
+# `user: "100:101"` (syslog:syslog) and the source files are owned 100:101.
+OWN_UID=100
+OWN_GID=101
 
 DRY_RUN=0
 
@@ -158,7 +161,7 @@ print_plan() {
   echo "      PRAGMA wal_checkpoint(TRUNCATE) on the source db"
   echo "      copy <db>, <db>-wal, <db>-shm to its destination volume"
   echo "      PRAGMA integrity_check + per-table row counts on the copy"
-  echo "  preserve ownership 100:101 on the copies (task 2.4)"
+  echo "  chown ${OWN_UID}:${OWN_GID} on every copied file + sidecars (implemented, task 2.4)"
   echo "  rename ${SRC_VOL}/edge.db -> edge.db.migrated (implemented; D2: rename, never delete)"
   echo "  abort before the rename on any verification failure (task 2.5, D4)"
   echo "  never remove any volume (D8); orphan ${PROJECT}_pin_data is documented, not touched"
@@ -241,9 +244,29 @@ ${dest_counts}"
 }
 
 preserve_ownership() {
-  # TASK 2.4 extension point: chown 100:101 (syslog:syslog) on all copied
-  # files, matching the production `user: "100:101"`.
-  fail "ownership preservation (task 2.4) is not implemented yet"
+  # Task 2.4: chown every copied file to 100:101 (syslog:syslog), matching
+  # the production `user: "100:101"` — a plain copy lands with the
+  # invoker's ownership (root:root when run via sudo), which the services
+  # could not write. Sidecars -wal/-shm are handled alongside the main db
+  # (same convention as 2.2/2.3). chown is idempotent, so re-runs before
+  # the rename converge. The script already needs root to read the Docker
+  # volume tree (preflight du), so a chown failure is fatal; the stat
+  # re-check catches a chown that silently does nothing.
+  local dest_mp db ext f owner
+  for db in "${DB_FILES[@]}"; do
+    dest_mp="$(volume_mountpoint "${DEST_FOR[$db]}")"
+    [ -n "$dest_mp" ] || fail "cannot resolve mountpoint of '${DEST_FOR[$db]}'"
+    for ext in "" -wal -shm; do
+      f="${dest_mp}/${db}${ext}"
+      [ -e "$f" ] || continue
+      chown "${OWN_UID}:${OWN_GID}" "$f" \
+        || fail "chown ${OWN_UID}:${OWN_GID} on ${DEST_FOR[$db]}/${db}${ext} failed (this script must run as root)"
+      owner="$(stat -c '%u:%g' "$f")"
+      [ "$owner" = "${OWN_UID}:${OWN_GID}" ] \
+        || fail "ownership on ${DEST_FOR[$db]}/${db}${ext} is ${owner}, expected ${OWN_UID}:${OWN_GID}"
+    done
+    note "ownership ${OWN_UID}:${OWN_GID} set on ${DEST_FOR[$db]}/${db} (+ sidecars present)"
+  done
 }
 
 rename_migrated_marker() {
@@ -251,7 +274,9 @@ rename_migrated_marker() {
   # this function means checkpoint_copy_verify (and preserve_ownership)
   # already succeeded for ALL databases — checkpoint_copy_verify fails closed
   # on the first bad copy, so a rename can never follow an unverified copy.
-  # Rename, never delete (D2).
+  # Rename, never delete (D2). Ownership note (task 2.4): mv preserves
+  # uid/gid, and the source edge.db is already 100:101 in production, so
+  # edge.db.migrated inherits ownership — no extra chown needed here.
   local src_mp ext
   src_mp="$(volume_mountpoint "$SRC_VOL")"
   if [ ! -f "${src_mp}/edge.db" ] && [ -f "${src_mp}/edge.db.migrated" ]; then
