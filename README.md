@@ -384,6 +384,37 @@ node sets `COMPOSE_PROFILES=edge` in its `.env` before it deploys this
 version.** Without it, a `docker compose down` leaves a running edge-service
 orphaned, and a later `up -d` keeps its old image and environment.
 
+### Image pins
+
+`compose.production.yaml` and `compose.relay.yaml` pin each image as
+`<image>:latest@sha256:<digest>`, the digest of the multi-arch index ghcr.io
+served for `latest` when the pin was set. Docker pulls by the digest, so
+`docker compose pull` fetches that build even after `latest` moves: a node
+gets a new build only once its digest is bumped here. The Compose config check
+in CI fails on any image in either file without a digest.
+
+To bump an image to the build `latest` names now:
+
+1. Read the digest of its index:
+
+   ```bash
+   docker buildx imagetools inspect ghcr.io/stardome-technology/stardome-sead/sead-core:latest
+   ```
+
+   Take the `Digest:` line under `Name:`, not a per-platform digest under
+   `Manifests:`.
+2. Replace the digest after `@sha256:` on the image's `image:` line. Bump
+   gossip-node in both `compose.production.yaml` and `compose.relay.yaml`.
+3. Check the result lists the new digest:
+
+   ```bash
+   docker compose -f compose.yaml -f compose.production.yaml config --images
+   docker compose -f compose.relay.yaml config --images
+   ```
+
+4. Open a PR. Once it merges, each node pulls the new build with `pull` and
+   `up -d`, as in [Start](#start).
+
 ### Start
 
 Start the stack:

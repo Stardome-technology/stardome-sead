@@ -28,13 +28,13 @@ x-hardening: &hardening
 
 services:
   sead-core:
-    image: ghcr.io/stardome-technology/stardome-sead/sead-core:latest
+    image: ghcr.io/stardome-technology/stardome-sead/sead-core:latest@sha256:110e9f9cd68ca20f01dc847d81d15990b0cdd349c31818ed541a061c90953972
     <<: *hardening
     tmpfs:
       - /tmp
 
   edge-service:
-    image: ghcr.io/stardome-technology/stardome-sead/edge-service:latest
+    image: ghcr.io/stardome-technology/stardome-sead/edge-service:latest@sha256:731bd19bc120fe4302746aaa7e9a448f6f8871e574226c51685a7d28bb29779e
     <<: *hardening
     # A larger memory limit: an out-of-memory kill between an XMSS signature
     # and the event's post spends a key index without using it.
@@ -44,7 +44,7 @@ services:
       - /tmp
 
   pin-service:
-    image: ghcr.io/stardome-technology/stardome-sead/pin-service:latest
+    image: ghcr.io/stardome-technology/stardome-sead/pin-service:latest@sha256:5a013b57ceb7a98e5ffdaaf6e425aa27d27c25b22f30815fe327b0bcea32a596
     <<: *hardening
     # The image has no `USER`, so it would run as root — and with all
     # capabilities dropped, root can't override file permissions either.
@@ -57,13 +57,13 @@ services:
       - /tmp
 
   source-data-service:
-    image: ghcr.io/stardome-technology/stardome-sead/source-data-service:latest
+    image: ghcr.io/stardome-technology/stardome-sead/source-data-service:latest@sha256:3bd66f4ea6d82ee98681d46973439bf0eb84bef25f56a4b78335f976ab746b16
     <<: *hardening
     tmpfs:
       - /tmp
 
   gossip-node:
-    image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
+    image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest@sha256:03a6c41a0dcccd1f8831fc299db6118b9196d41886cdf55927bd2534b533ff88
     <<: *hardening
     # No `user:`: gossip-node runs as root and writes its identity key into
     # the root-owned directory mounted at /data/gossip-keys. A non-root user
@@ -73,7 +73,7 @@ services:
       - /run
 
   gateway:
-    image: ghcr.io/stardome-technology/stardome-sead-gateway:latest
+    image: ghcr.io/stardome-technology/stardome-sead-gateway:latest@sha256:3175b52307f953e65f2a43eb0c07bef5f797d4563146ba15a794bc2ce969fb6e
     <<: *hardening
     tmpfs:
       - /tmp
