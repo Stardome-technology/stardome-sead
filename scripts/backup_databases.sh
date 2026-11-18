@@ -31,11 +31,10 @@
 # refused.
 #
 # Status: task 3.1 (skeleton: explicit db list, CLI, pre-flight, --dry-run),
-# task 3.2 (checkpoint + copy + integrity_check on the copy) and task 3.3
-# (timestamped host destination directory) are implemented. Task 3.4
-# (explicit refusal guard if edge.db ever enters the list) is a separate
-# upcoming task; its step is an extension point below that REFUSES to run
-# until implemented, so this script can never produce a half-baked backup.
+# task 3.2 (checkpoint + copy + integrity_check on the copy), task 3.3
+# (timestamped host destination directory) and task 3.4 (runtime guard that
+# refuses to run if edge.db — or any unsanctioned database — ever enters the
+# list) are implemented.
 #
 # Task 3.3 destination scheme (D6): each backup run writes into its own
 # timestamped subdirectory  ${BACKUP_ROOT}/<UTC timestamp>  where
@@ -64,8 +63,8 @@ set -euo pipefail
 
 PROJECT="stardome-sead"
 # D5: EXPLICIT database list — never a glob, never `ls *.db`. edge.db is
-# absent from this list by construction; task 3.4 adds a guard that also
-# refuses to run if a future edit ever adds it.
+# absent from this list by construction; guard_edge_exclusion (task 3.4)
+# re-checks the list at every run and refuses if a future edit ever adds it.
 DB_FILES=(sead.db sourcedata.db pin-service.db)
 # Which per-service volume each database lives in (compose.yaml layout).
 declare -A SRC_FOR=(
@@ -155,20 +154,48 @@ print_plan() {
   echo "    PRAGMA integrity_check on the copy; anything but 'ok' aborts fail closed"
   echo "  destination (task 3.3, implemented):"
   echo "    ${BACKUP_ROOT}/<UTC timestamp YYYYmmddTHHMMSSZ> (root configurable via BACKUP_ROOT)"
-  echo "  guard (task 3.4, not yet implemented):"
-  echo "    refuse to run if edge.db ever appears in the database list"
+  echo "  guard (task 3.4, implemented):"
+  echo "    refuses to run if edge.db or any unsanctioned db appears in the list"
 }
 
 # ---------------------------------------------------------------------------
 # Task 3.2 (implemented): checkpoint + copy + integrity_check.
-# Extension points for tasks 3.3/3.4 below still refuse to run.
+# Task 3.4 (implemented): guard_edge_exclusion below — runtime allow-list
+# check that refuses the run if the database list was ever tampered with.
 # ---------------------------------------------------------------------------
 
 guard_edge_exclusion() {
-  # Task 3.4: refuse to run if edge.db (or any unexpected db) is in the
-  # list. Not implemented yet — task 3.1 only guarantees edge.db is absent
-  # from the list by construction.
-  fail "backup step not implemented: guard_edge_exclusion arrives with task 3.4"
+  # Task 3.4 (D5): runtime fail-closed tripwire. D5's safety rests on the
+  # explicit list excluding edge.db — restoring a stale edge.db means silent
+  # XMSS leaf reuse (forgery), so inclusion is THE failure mode this change
+  # designs against. This guard therefore assumes NOTHING about the list
+  # being correct by construction: at every run it re-inspects the actual
+  # DB_FILES entries and the actual SRC_FOR keys/values and requires an
+  # exact match against the sanctioned set below. Allow-list, not a
+  # `!= edge.db` deny-list: ANY database a future edit adds (edge.db or
+  # otherwise) aborts the run before pre-flight touches Docker and before
+  # resolve_destination creates any directory.
+  local db vol
+  for db in "${DB_FILES[@]}"; do
+    case "$db" in
+      sead.db|sourcedata.db|pin-service.db) ;;
+      *) fail "database list contains unsanctioned database '${db}' (sanctioned: sead.db sourcedata.db pin-service.db); edge.db must NEVER be backed up (design D5) — refusing to run" ;;
+    esac
+  done
+  for db in "${!SRC_FOR[@]}"; do
+    case "$db" in
+      sead.db|sourcedata.db|pin-service.db) ;;
+      *) fail "SRC_FOR maps unsanctioned database '${db}' (sanctioned: sead.db sourcedata.db pin-service.db); edge.db must NEVER be backed up (design D5) — refusing to run" ;;
+    esac
+    # A sanctioned db name pointed at an edge volume is the same failure
+    # mode wearing a different hat: the content backed up would be edge
+    # state regardless of the file name.
+    vol="${SRC_FOR[$db]}"
+    case "$vol" in
+      *edge*) fail "SRC_FOR['${db}'] points at edge-related volume '${vol}'; edge state must NEVER be backed up (design D5) — refusing to run" ;;
+    esac
+  done
+  note "guard: database list matches the sanctioned set (no edge.db, no unsanctioned database)"
 }
 
 resolve_destination() {
@@ -280,6 +307,12 @@ backup_databases() {
 }
 
 main() {
+  # Task 3.4: the guard runs FIRST — before pre-flight (which would itself
+  # fail on a bogus list with a less specific message) and before the
+  # dry-run branch (a tampered list must abort every mode, and dry-run
+  # printing a plan that includes edge.db is exactly the confusion this
+  # tripwire exists to prevent). Nothing is inspected or written before it.
+  guard_edge_exclusion
   preflight
 
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -288,7 +321,6 @@ main() {
     exit 0
   fi
 
-  guard_edge_exclusion   # task 3.4
   backup_databases       # tasks 3.2 + 3.3
   note "backup complete"
 }
