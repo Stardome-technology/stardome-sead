@@ -65,7 +65,7 @@ no step assumes a systemd unit or an update script (there are none).
 - [ ] 5.2 Verify: row counts per table match, `integrity_check` `ok`, edge-service healthy, and the
   next signature uses an index greater than the last one before the migration.
 - [ ] 5.3 Repeat on edge2.
-- [ ] 5.4 Confirm `up` fails with a clear error on a node where the external volume is absent.
+- [x] 5.4 Confirm `up` fails with a clear error on a node where the external volume is absent.
 - [ ] 5.5 Confirm the copied files keep ownership `100:101` (they are `syslog:syslog` on the host).
 - [ ] 5.6 Confirm the gossip PeerId is unchanged across the migration (the identity key is not in
   `sead_data`, but the check costs nothing and catches an accidental volume swap).
