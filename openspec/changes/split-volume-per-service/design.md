@@ -166,4 +166,5 @@ The migration does **not** remove the orphan volume; it is documented as unused.
 ## Open Questions
 
 - Does the backup need to run on a schedule (cron/systemd timer), or is manual invocation enough for
-  now? There is no scheduler on the edges today.
+  now? There is no scheduler on the edges today. Recorded as a follow-up in
+  `docs/backup-runbook.md` ("Follow-up: backup scheduling") — still an open decision, not resolved.
