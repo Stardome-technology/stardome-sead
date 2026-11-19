@@ -77,4 +77,4 @@ missing-volume failure mode demonstrated.
 
 - [ ] 6.1 Record evidence: per-table row counts before/after, `integrity_check` output, the
   absent-volume error message.
-- [ ] 6.2 Note the follow-up: whether backups should run on a schedule (no scheduler exists today).
+- [x] 6.2 Note the follow-up: whether backups should run on a schedule (no scheduler exists today).

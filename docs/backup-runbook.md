@@ -99,8 +99,8 @@ operational data — unlike `edge.db`, these three databases are safe to
 restore.
 
 There is **no scheduler on the nodes** (no systemd unit, no cron entry):
-invocation is manual for now; whether it should be a timer is an open
-question in the design doc.
+invocation is manual for now — see
+[Follow-up: backup scheduling](#follow-up-backup-scheduling).
 
 Before the volume migration has run on a node, this script cannot be used
 (it reads per-service volumes and fails closed) — the pre-migration
@@ -126,3 +126,36 @@ Remove any stale `-wal`/`-shm` sidecars in the volume next to a restored
 database (the snapshot is self-contained; old sidecars do not match it).
 And the standing rule again: **no snapshot ever contains `edge.db`** — if
 edge state is missing, that is a rotation event, not a restore.
+
+## Follow-up: backup scheduling
+
+Recorded follow-up (split-volume-per-service task 6.2). **Open decision —
+not scheduled work.**
+
+Backups are manual-invocation only today: there is no scheduler on the edge
+nodes (no cron entry, no systemd timer), and `scripts/backup_databases.sh`
+runs only when an operator runs it. The open decision is whether to add a
+scheduler — cron vs. systemd timer — and at what cadence and retention.
+
+Constraints that matter for the decision:
+
+- The schedule question applies **only** to `sead.db`, `sourcedata.db` and
+  `pin-service.db`. `edge.db` is deliberately never backed up (design D5);
+  the script's explicit allow-list and runtime guard enforce that
+  regardless of how the script is invoked, so no schedule can change the
+  coverage rule.
+- The destination is the operator-managed host directory `BACKUP_ROOT`
+  (default `/var/backups/sead`; the runbook examples show a removable
+  path like `/mnt/usb/backups`). If that path is a removable or network
+  mount, a timer firing while it is not mounted is a failure mode the
+  decision must account for (mount dependency, or accepting failed runs).
+- Each run writes a new timestamped directory and nothing prunes old ones —
+  a retention policy (how many snapshots to keep, where they get shipped)
+  is part of the same decision; today cleanup is operator-manual.
+- The script is safe to run against a live stack and never touches the
+  sources on failure (fails closed), so a scheduled run needs no downtime
+  window or coordination with the services.
+
+The matching Open Question in
+`openspec/changes/split-volume-per-service/design.md` stays open and
+cross-references this note.
