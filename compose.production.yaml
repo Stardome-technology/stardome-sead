@@ -65,10 +65,11 @@ services:
   gossip-node:
     image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
     <<: *hardening
-    # No `user:`: gossip-node runs as root, since its identity key on the
-    # host, mounted from GOSSIP_IDENTITY_DIR at /data/gossip-keys, is owned
-    # root:root at mode 0600. With capabilities dropped, a non-root user
-    # can't read that key: gossip-node exits at start and crash-loops.
+    # No `user:`: from v0.1.0 the image runs as 10001:10001, so its identity
+    # key on the host, mounted from GOSSIP_IDENTITY_DIR at /data/gossip-keys,
+    # must belong to 10001 at mode 0600. Older images run as root and need
+    # the key owned root:root. With capabilities dropped, root can't read a
+    # key it doesn't own either: gossip-node exits at start and crash-loops.
     tmpfs:
       - /tmp
       - /run

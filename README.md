@@ -356,12 +356,19 @@ node that dials it.
 3. Check it:
 
    ```bash
-   sudo stat -c '%U:%G %a %s' /var/lib/sead/gossip-keys/gossip-identity.key
-   # → root:root 600 68
+   sudo stat -c '%u:%g %a %s' /var/lib/sead/gossip-keys/gossip-identity.key
+   # → 10001:10001 600 68   images from v0.1.0 on, today's `latest` included
+   # → 0:0 600 68           older images, under the production override
    ```
 
-   On native Docker Engine on Linux, gossip-node runs as root and reads the
-   key as root, so the file stays owned `root:root` at mode `0600`.
+   On native Docker Engine on Linux, the owner depends on gossip-node's
+   image. From `v0.1.0` on, today's `latest` included, the image runs as
+   `10001:10001`, so the key must belong to `10001`, at mode `0600`. Older
+   images run gossip-node as root, so the key stays owned `root:root`, uid
+   and gid `0`, at mode `0600`. The production override drops all
+   capabilities, so even root can't read a key it doesn't own: with the
+   wrong owner, gossip-node exits at start and crash-loops. `stat` prints
+   numeric IDs since the host may have no user `10001`.
 
    **Docker Desktop** reads and writes mounted host files as the user who
    runs Docker Desktop, not as root, so on macOS a directory or key owned by
@@ -419,9 +426,10 @@ Exceptions:
   dropped even root can't bypass file permissions — pin-service writes its
   CID-tracker DB into the `sead_data` volume, owned `100:101`. Without
   capabilities, root in the remaining containers can't bypass file
-  permissions either. gossip-node has no `user:` override: its identity key
-  on the host is owned `root:root` at mode `0600`
-  ([Gossip identity key](#gossip-identity-key)), and under a non-root user
+  permissions either. gossip-node has no `user:` override: images before
+  `v0.1.0` run it as root and those from `v0.1.0` as `10001:10001`, and its
+  identity key on the host, at mode `0600`, must belong to that user
+  ([Gossip identity key](#gossip-identity-key)); under any other user
   gossip-node can't read it, exits at start and crash-loops.
 - **On an existing deployment, `chown 100:101 /data/pin-service.db*` once**
   before first start under this overlay: volumes created by older stacks may
