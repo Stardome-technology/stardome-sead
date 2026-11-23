@@ -28,7 +28,7 @@ apply to it once it is.
 | Tag | Names | Moves | A node pins it |
 |-----|-------|-------|----------------|
 | `X.Y.Z`, such as `1.4.0` | a release | never | yes, with its digest |
-| `latest` | the newest build of `main` | on every push to `main` | only with its digest, until the image's first release |
+| `latest` | the newest build of `main` | on every push to `main` | never |
 | `<tag>-amd64`, `<tag>-arm64` | one architecture's image for `<tag>` | with `<tag>` | never |
 
 - **`X.Y.Z`** is a release. Stardome's CI publishes it when a git tag
@@ -44,42 +44,40 @@ apply to it once it is.
 
 ## What a node pins
 
-A production node references each image by a tag and the digest of the
-multi-arch index that tag names:
-
-- until the image's first release: `<image>:latest@sha256:<index digest>`;
-- from its first release on: `<image>:X.Y.Z@sha256:<index digest>`.
+A production node references each image by its release tag and the digest
+of the multi-arch index that tag names:
+`<image>:X.Y.Z@sha256:<index digest>`.
 
 Docker pulls by the digest, so a node runs the same build until the digest
 changes. The tag stays in the reference so readers and update tools can tell
 which tag the digest was read from.
 
-Neither of these is a production pin:
+None of these is a production pin:
 
-- `latest` alone, since it moves on every push to `main`;
+- `latest`, alone or with its digest, since it moves on every push to
+  `main` and names no release;
 - a per-arch tag, since it moves with every build of its tag and covers one
   architecture only.
 
 Read an index digest with:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/stardome-technology/stardome-sead/sead-core:latest
+docker buildx imagetools inspect ghcr.io/stardome-technology/stardome-sead/sead-core:0.1.0
 ```
 
 and take the `Digest:` line under `Name:`, the digest of the index, not one
 of the per-platform digests listed under `Manifests:`.
 
-The interim `latest@sha256:` form ends image by image: once ghcr.io lists an
-`X.Y.Z` tag for an image, nodes switch that image's reference to
-`X.Y.Z@sha256:<index digest>`.
-
 ## Where the images stand
 
-No image has a release yet: every image on ghcr.io carries only `latest`, and
-the images CI builds also carry `latest-amd64` and `latest-arm64`.
+The first release is `0.1.0`. Stardome's CI published it, for both
+architectures, for every image in the table except `p2p-bridge`: the six
+service images and `keygen`, `gen-token` and `gen-bootstrap`. The same CI
+now builds all of them, and moves `latest` with each push to `main`.
+`p2p-bridge` is deprecated, since gossip-node replaces it, and has no
+release.
 
-Stardome's CI builds sead-core, edge-service, source-data-service and the
-gateway. pin-service, gossip-node and the tool images are still built and
-pushed by hand, and only as `latest`; the source repository's CI is being
-extended to build them. Until it is, those images get no `X.Y.Z` tag, and
-nodes pin them as `latest@sha256:<index digest>`.
+From `0.1.0`, every image runs as `sead`, uid and gid `10001`, where older
+builds ran some services as uid `100` and others as root. A node set up with
+older images changes its files' owner when it switches to `0.1.0`: see the
+README, "Moving a node to the v0.1.0 user".
