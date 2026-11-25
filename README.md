@@ -478,9 +478,11 @@ On native Docker Engine on Linux, once per node:
    docker compose -f compose.yaml -f compose.production.yaml down
    ```
 
-3. Set `GOSSIP_IDENTITY_DIR` to the directory gossip-node mounts: its value
-   in `.env`, or, when `.env` doesn't set it, the default in `compose.yaml`,
-   with `~` as the home of the user who runs `docker compose`. Then find the
+3. Set `GOSSIP_IDENTITY_DIR` to the directory gossip-node mounts, an
+   absolute path: its value in `.env`, or, when `.env` doesn't set it, the
+   default `/var/lib/sead/gossip-keys` in `compose.yaml`. When the node's key
+   is still in `~/.sead/gossip-keys`, copy it there first, as
+   [Gossip identity key](#gossip-identity-key) describes. Then find the
    `sead_data` volume's directory on the host; the volume's name comes from
    the project name `stardome-sead` that `compose.yaml` sets:
 
@@ -846,6 +848,16 @@ docker run --rm -v "$(pwd):/data" \
 > `--attestation-file` path must be inside a directory you passed with
 > `-v`. If the file is elsewhere, mount that directory instead:
 > `docker run --rm -v /absolute/path/to/signatures:/data ...`
+
+> **Output directory owner:** from `0.1.0`, the tool images run as uid
+> `10001`. On native Docker Engine on Linux, the directory you mount with
+> `-v` must be writable by `10001` whenever the tool writes there, as with
+> `--out-file` or `--key-index-db`, or the tool can't write its output. Give
+> the directory to that user, `sudo chown 10001:10001 <dir>`, or run the tool
+> as yourself with `docker run --user "$(id -u):$(id -g)" ...`. An
+> `org-key-index.db` an older image wrote is owned by root: give it to the
+> user that runs the tool before the next signing command. Docker Desktop
+> needs neither.
 
 The `--attestation-file` option extracts the module's public key, Merkle root,
 and XMSS signature from the attestation CBOR binary, and derives the

@@ -80,4 +80,6 @@ release.
 From `0.1.0`, every image runs as `sead`, uid and gid `10001`, where older
 builds ran some services as uid `100` and others as root. A node set up with
 older images changes its files' owner when it switches to `0.1.0`: see the
-README, "Moving a node to the v0.1.0 user".
+README, "Moving a node to the v0.1.0 user". The tool images run as `10001`
+too, so on native Docker Engine on Linux a directory they write into, with
+`--out-file` or `--key-index-db`, must be writable by `10001`.
