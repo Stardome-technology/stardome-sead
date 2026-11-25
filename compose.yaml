@@ -278,13 +278,26 @@ services:
       - GATEWAY_TLS_CERT=${GATEWAY_TLS_CERT:-/etc/gateway/certs/server.crt}
       - GATEWAY_TLS_KEY=${GATEWAY_TLS_KEY:-/etc/gateway/certs/server.key}
       - GATEWAY_AUTH_ENABLED=${GATEWAY_AUTH_ENABLED:-true}
-      - SEAD_AUTH_SECRET=${SEAD_AUTH_SECRET:?}
-      - GATEWAY_EDGE_TOKENS=${GATEWAY_EDGE_TOKENS:-}
+      # Gateway secrets follow the Docker _FILE convention (gateway v0.1.0,
+      # internal/config secretOrErr): when *_FILE is set the gateway reads the
+      # secret from that file and fails closed if it cannot. The *_FILE paths
+      # are container paths; ./secrets is bind-mounted at /etc/gateway/certs:ro,
+      # so files placed under ./secrets are reachable there. The inline values
+      # stay supported: unset *_FILE falls back to them exactly as before.
+      # The nested ${...:?} keeps the compose-time fail-fast: with neither the
+      # inline secret nor its _FILE set, config errors naming the variable
+      # instead of starting the gateway with an empty secret.
+      - SEAD_AUTH_SECRET=${SEAD_AUTH_SECRET:-${SEAD_AUTH_SECRET_FILE:?}}
+      - SEAD_AUTH_SECRET_FILE=${SEAD_AUTH_SECRET_FILE:-}
+      - GATEWAY_EDGE_TOKENS=${GATEWAY_EDGE_TOKENS:-${GATEWAY_EDGE_TOKENS_FILE:-}}
+      - GATEWAY_EDGE_TOKENS_FILE=${GATEWAY_EDGE_TOKENS_FILE:-}
       - GATEWAY_AUTH_CBOR_ENABLED=${GATEWAY_AUTH_CBOR_ENABLED:-true}
       # Key resolution uses the SVC_SEAD_CORE_GRPC gRPC target
       - GATEWAY_AUTH_CBOR_CACHE_TTL=${GATEWAY_AUTH_CBOR_CACHE_TTL:-60}
       - GATEWAY_AUTH_CBOR_SKEW_TOLERANCE=${GATEWAY_AUTH_CBOR_SKEW_TOLERANCE:-30}
       - GATEWAY_METRICS_ENABLED=${GATEWAY_METRICS_ENABLED:-true}
+      - GATEWAY_METRICS_TOKEN=${GATEWAY_METRICS_TOKEN:-}
+      - GATEWAY_METRICS_TOKEN_FILE=${GATEWAY_METRICS_TOKEN_FILE:-}
       - GATEWAY_LOG_LEVEL=${GATEWAY_LOG_LEVEL:-info}
       - GATEWAY_READ_TIMEOUT=${GATEWAY_READ_TIMEOUT:-30s}
       - GATEWAY_WRITE_TIMEOUT=${GATEWAY_WRITE_TIMEOUT:-30s}
@@ -301,6 +314,7 @@ services:
       # missing events from over HTTPS. Comma-separated base URLs.
       - GATEWAY_PEERS=${GATEWAY_PEERS:-}
       - GATEWAY_PEER_TOKEN=${GATEWAY_PEER_TOKEN:-}
+      - GATEWAY_PEER_TOKEN_FILE=${GATEWAY_PEER_TOKEN_FILE:-}
       # Peer gateway TLS: set GATEWAY_PEER_TLS_INSECURE=true only for
       # isolated/own-party deployments using self-signed certs; or set
       # GATEWAY_PEER_CA_CERT to a PEM CA bundle for a private CA.
