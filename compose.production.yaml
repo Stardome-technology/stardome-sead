@@ -46,13 +46,12 @@ services:
   pin-service:
     image: ghcr.io/stardome-technology/stardome-sead/pin-service:0.1.0@sha256:8b9d0fab7e2f441a05126dafa0b3c9364177e237d46ff49a3c71ad26586263f6
     <<: *hardening
-    # The image has no `USER`, so it would run as root — and with all
-    # capabilities dropped, root can't override file permissions either.
-    # pin-service writes its CID-tracker SQLite DB into the shared `sead_data`
-    # volume, owned 100:101 (the `sead` user the C++ services run as), so run
-    # it as that owner. On an EXISTING deployment, chown any root-owned
-    # /data/pin-service.db* files to 100:101 once, before first start.
-    user: "100:101"
+    # No `user:`: from v0.1.0 the image runs as 10001:10001, like every other
+    # service, and writes its CID-tracker SQLite DB into the shared
+    # `sead_data` volume, which must belong to that user. A node set up with
+    # older images runs scripts/migrate-sead-ownership.sh once, with the stack
+    # stopped, when it switches to v0.1.0 (see the README, "Moving a node to
+    # the v0.1.0 user").
     tmpfs:
       - /tmp
 

@@ -192,17 +192,22 @@ environment, so `docker inspect` of edge-service shows none.
 
 - **Bare hex.** Each file holds one key as hex on one line: the value alone,
   without its `SECRET_KEY` or `PUBLIC_KEY` label. A trailing newline is fine.
-- **Owner and mode.** edge-service runs as `sead`, uid `100` and gid `101`,
-  and must be able to read each file. Each file has mode `0400`. Its owner
+- **Owner and mode.** edge-service runs as `sead`, uid and gid `10001`, and
+  must be able to read each file. Each file has mode `0400`. Its owner
   depends on the platform:
   - **Native Docker Engine on Linux** keeps the host file's owner on a
-    bind-mounted secret, so each file must be owned by `100:101`:
-    `sudo chown 100:101 keys/*.hex && sudo chmod 0400 keys/*.hex`. Only root
-    and the container can then read the files. You don't need to read them
-    back after writing them. With the files owned by you instead,
+    bind-mounted secret, so each file must be owned by `10001:10001`:
+    `sudo chown 10001:10001 keys/*.hex && sudo chmod 0400 keys/*.hex`. Only
+    root and the container can then read the files. You don't need to read
+    them back after writing them. With the files owned by you instead,
     edge-service fails to read them with `EACCES` and exits. With rootless
     Docker or `userns-remap`, the container's uid and gid map to other ids on
-    the host: give each file the host ids that `100` and `101` map to.
+    the host: give each file the host ids that `10001` maps to. Images before
+    `v0.1.0` ran edge-service as uid `100` and gid `101`: on a node set up
+    with them, the migration in
+    [Moving a node to the v0.1.0 user](#moving-a-node-to-the-v010-user)
+    changes the owner, in the same step as the switch to the `v0.1.0`
+    images.
   - **Docker Desktop** shows a mounted file to the container as owned by the
     container's user, so files owned by the user who runs `docker compose`
     work: `chmod 0400 keys/*.hex`.
@@ -420,30 +425,110 @@ proportion.
 
 Exceptions:
 
-- **gossip-node and the gateway run as root.** sead-core, edge-service and
-  source-data-service run as `sead`, and pin-service is pinned to `100:101`
-  (the same uid/gid): its image has no `USER`, and with all capabilities
-  dropped even root can't bypass file permissions — pin-service writes its
-  CID-tracker DB into the `sead_data` volume, owned `100:101`. Without
-  capabilities, root in the remaining containers can't bypass file
-  permissions either. gossip-node has no `user:` override: images before
-  `v0.1.0` run it as root and those from `v0.1.0` as `10001:10001`, and its
-  identity key on the host, at mode `0600`, must belong to that user
-  ([Gossip identity key](#gossip-identity-key)); under any other user
-  gossip-node can't read it, exits at start and crash-loops.
-- **On an existing deployment, `chown 100:101 /data/pin-service.db*` once**
-  before first start under this overlay: volumes created by older stacks may
-  hold a root-owned pin-service DB that uid 100 can't write.
-- **The gateway's image has no `USER`, so it runs as root.** It reads its TLS
-  key, `server.key` at mode `0600`, from `./secrets`, mounted read-only at
-  `/etc/gateway/certs`, and writes no files. Because capabilities are dropped,
-  root here obeys file permissions like any user: `server.key` must be owned
-  by (or readable by) root — a key owned by an unprivileged user at `0600`
-  makes the gateway crash-loop with `permission denied`.
+- **Every service runs as `sead`, uid and gid `10001`.** From `v0.1.0`, each
+  image sets that user itself, so the overlay sets no `user:`. With all
+  capabilities dropped, even root couldn't bypass file permissions, so each
+  file a service reads or writes on native Docker Engine on Linux must belong
+  to `10001`: the `sead_data` volume's databases, the key files, the gossip
+  identity key ([Gossip identity key](#gossip-identity-key)) and the gateway's
+  TLS key. A node set up with older images has them owned by uid `100` or by
+  root: run the migration in
+  [Moving a node to the v0.1.0 user](#moving-a-node-to-the-v010-user) when
+  you switch to the `v0.1.0` images.
+- **The gateway reads its TLS key, `server.key` at mode `0600`, from
+  `./secrets`**, mounted read-only at `/etc/gateway/certs`, and writes no
+  files. On native Docker Engine on Linux, `server.key` must be owned by
+  `10001`: a key owned by any other user at `0600`, root included, makes the
+  gateway crash-loop with `permission denied`.
 - **edge-service gets a larger memory limit than the other services.** An
   out-of-memory kill between an XMSS signature and the event's post spends a
   key index without using it, so edge-service gets 512 MiB rather than
   256 MiB.
+
+### Moving a node to the v0.1.0 user
+
+From `v0.1.0`, every image runs as `sead`, uid and gid `10001`, which
+`scripts/image-user.env` declares. Older images ran sead-core, edge-service,
+source-data-service and pin-service as uid `100` and gid `101`, and gossip-node
+and the gateway as root. Since every service drops all capabilities, the
+`v0.1.0` images can't read or write files the old users own, and the old
+images can't read or write files `10001` owns.
+
+So change the owners **in the same step as the switch to the `v0.1.0`
+images, never before**, with the stack stopped. `scripts/migrate-sead-ownership.sh`,
+copied from the SEAD source repository at `v0.1.0` with only its comments and
+log text reworded, does it: it
+gives `10001:10001` to each file owned by uid `100` or `0`, leaves any other
+owner alone and lists it as `[foreign]`, and logs the gossip identity key's
+checksum before and after. A second run changes nothing.
+
+On native Docker Engine on Linux, once per node:
+
+1. While the stack still runs, update the clone to the version that pins the
+   `v0.1.0` images, and pull them:
+
+   ```bash
+   git pull
+   docker compose -f compose.yaml -f compose.production.yaml pull
+   ```
+
+2. Stop the stack, keeping its volumes:
+
+   ```bash
+   docker compose -f compose.yaml -f compose.production.yaml down
+   ```
+
+3. Set `GOSSIP_IDENTITY_DIR` to the directory gossip-node mounts, an
+   absolute path: its value in `.env`, or, when `.env` doesn't set it, the
+   default `/var/lib/sead/gossip-keys` in `compose.yaml`. When the node's key
+   is still in `~/.sead/gossip-keys`, copy it there first, as
+   [Gossip identity key](#gossip-identity-key) describes. Then find the
+   `sead_data` volume's directory on the host; the volume's name comes from
+   the project name `stardome-sead` that `compose.yaml` sets:
+
+   ```bash
+   GOSSIP_IDENTITY_DIR=<the directory gossip-node mounts>
+   SEAD_DATA="$(docker volume inspect stardome-sead_sead_data -f '{{.Mountpoint}}')"
+   ```
+
+4. Run the migration with `--dry-run` first, from the clone, and read each
+   line: `[dry-run] would chown` names a file it would change, and
+   `[foreign]` a file whose owner it doesn't know, which you check by hand:
+
+   ```bash
+   sudo IMAGE_USER_ENV=scripts/image-user.env \
+     GOSSIP_IDENTITY_DIR="$GOSSIP_IDENTITY_DIR" \
+     sh scripts/migrate-sead-ownership.sh --dry-run \
+     "$SEAD_DATA" keys secrets "$GOSSIP_IDENTITY_DIR"
+   ```
+
+   Pass the four paths: given paths, the script scans only those, and
+   skips its own defaults, which miss `keys/` and `secrets/`.
+   `GOSSIP_IDENTITY_DIR` also tells it where the key to checksum is.
+
+5. Run the same command without `--dry-run`. Check that the two
+   `[key] checksum` lines match: changing an owner never changes the key.
+6. Start the stack, and check that gossip-node logs the PeerId it had before:
+
+   ```bash
+   docker compose -f compose.yaml -f compose.production.yaml up -d --wait
+   docker compose -f compose.yaml -f compose.production.yaml logs gossip-node | grep "peer ID"
+   ```
+
+On **Docker Desktop**, the files in the clone and the gossip key directory
+stay owned by you, since Docker Desktop shows them to the container as owned
+by its user; only the `sead_data` volume, inside Docker Desktop's VM, needs
+the migration. Run it in a container, with the stack stopped as in step 2,
+`--dry-run` first:
+
+```bash
+docker run --rm -u 0 \
+  -e IMAGE_USER_ENV=/src/image-user.env \
+  -v "$PWD/scripts:/src:ro" \
+  -v stardome-sead_sead_data:/mnt/sead_data \
+  alpine:3.20 \
+  sh /src/migrate-sead-ownership.sh --dry-run /mnt/sead_data
+```
 
 ### Restarts and logs
 
@@ -763,6 +848,16 @@ docker run --rm -v "$(pwd):/data" \
 > `--attestation-file` path must be inside a directory you passed with
 > `-v`. If the file is elsewhere, mount that directory instead:
 > `docker run --rm -v /absolute/path/to/signatures:/data ...`
+
+> **Output directory owner:** from `0.1.0`, the tool images run as uid
+> `10001`. On native Docker Engine on Linux, the directory you mount with
+> `-v` must be writable by `10001` whenever the tool writes there, as with
+> `--out-file` or `--key-index-db`, or the tool can't write its output. Give
+> the directory to that user, `sudo chown 10001:10001 <dir>`, or run the tool
+> as yourself with `docker run --user "$(id -u):$(id -g)" ...`. An
+> `org-key-index.db` an older image wrote is owned by root: give it to the
+> user that runs the tool before the next signing command. Docker Desktop
+> needs neither.
 
 The `--attestation-file` option extracts the module's public key, Merkle root,
 and XMSS signature from the attestation CBOR binary, and derives the

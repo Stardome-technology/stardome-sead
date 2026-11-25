@@ -68,6 +68,16 @@ docker run --rm -v "$(pwd):/data" \
 > `-v`. If the file is elsewhere, mount that directory instead:
 > `docker run --rm -v /absolute/path/to/signatures:/data ...`
 
+> **Output directory owner:** from `0.1.0`, the tool images run as uid
+> `10001`. On native Docker Engine on Linux, the directory you mount with
+> `-v` must be writable by `10001` whenever the tool writes there, as with
+> `--out-file` or `--key-index-db`, or the tool can't write its output. Give
+> the directory to that user, `sudo chown 10001:10001 <dir>`, or run the tool
+> as yourself with `docker run --user "$(id -u):$(id -g)" ...`. An
+> `org-key-index.db` an older image wrote is owned by root: give it to the
+> user that runs the tool before the next signing command. Docker Desktop
+> needs neither.
+
 The `--attestation-file` option parses the CBOR attestation binary, extracts
 `module_pk`, `merkle_root`, and `signature`, and derives `module_id` as
 `SHAKE256(module_pk)` — no manual hex copy-paste needed.

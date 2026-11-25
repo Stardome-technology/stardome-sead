@@ -109,7 +109,7 @@ Follow the standard deployment in the main [`README.md`](../README.md)
 EDGE_ORG_ID=<org_id_hex>
 EDGE_ID=<edge_id_hex>
 EDGE_SIGNING_KEY_FILE=./keys/edge_signing_key.hex   # bare-hex key files, mode 0400,
-EDGE_ORG_SIGNING_KEY_FILE=./keys/org_signing_key.hex # owned by 100:101 on Linux:
+EDGE_ORG_SIGNING_KEY_FILE=./keys/org_signing_key.hex # owned by 10001:10001 on Linux:
                                                      # see the README, "Key files"
 EDGE_ORG_PUBLIC_KEY_FILE=./keys/org_public_key.hex
 GOSSIP_ORG_ID=<org_id_hex>            # same value as EDGE_ORG_ID
