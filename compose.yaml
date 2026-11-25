@@ -284,9 +284,12 @@ services:
       # are container paths; ./secrets is bind-mounted at /etc/gateway/certs:ro,
       # so files placed under ./secrets are reachable there. The inline values
       # stay supported: unset *_FILE falls back to them exactly as before.
-      - SEAD_AUTH_SECRET=${SEAD_AUTH_SECRET:-}
+      # The nested ${...:?} keeps the compose-time fail-fast: with neither the
+      # inline secret nor its _FILE set, config errors naming the variable
+      # instead of starting the gateway with an empty secret.
+      - SEAD_AUTH_SECRET=${SEAD_AUTH_SECRET:-${SEAD_AUTH_SECRET_FILE:?}}
       - SEAD_AUTH_SECRET_FILE=${SEAD_AUTH_SECRET_FILE:-}
-      - GATEWAY_EDGE_TOKENS=${GATEWAY_EDGE_TOKENS:-}
+      - GATEWAY_EDGE_TOKENS=${GATEWAY_EDGE_TOKENS:-${GATEWAY_EDGE_TOKENS_FILE:-}}
       - GATEWAY_EDGE_TOKENS_FILE=${GATEWAY_EDGE_TOKENS_FILE:-}
       - GATEWAY_AUTH_CBOR_ENABLED=${GATEWAY_AUTH_CBOR_ENABLED:-true}
       # Key resolution uses the SVC_SEAD_CORE_GRPC gRPC target
