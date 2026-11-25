@@ -1,23 +1,23 @@
 #!/bin/sh
 # migrate-sead-ownership.sh — one-shot root migration of existing SEAD state to
 # the canonical image identity declared in image-user.env
-# (openspec change: sead-nonroot-user, task 3.1).
+# (used when every service moves to the non-root image user).
 #
-# WHY (design D1): live state on nodes is owned either by the legacy Alpine
+# WHY: live state on nodes is owned either by the legacy Alpine
 # `-S` user (uid 100 / gid 101 — sead-core and pin-service today) or by root
 # (gossip-node runs as root; its identity key is 0:0 0600). Both must be
 # relabelled to $SEAD_UID:$SEAD_GID before the non-root images start.
 #
-# HOW (design D4): run ONCE as root BEFORE the non-root stack starts.
+# HOW: run ONCE as root BEFORE the non-root stack starts.
 # Idempotent by construction: only files still owned by a known legacy UID are
 # touched, so a second run is a no-op exit 0. Files owned by an unexpected
 # third UID are reported and left alone (operator decides — never blind-chown
 # state of unknown provenance).
 #
-# PEERID EVIDENCE (design D5): the gossip identity key checksum is logged
+# PEERID EVIDENCE: the gossip identity key checksum is logged
 # before and after the run and must be identical (chown never rewrites
 # content; a mismatch means something else touched the file). The full
-# before/after PeerId capture is task 3.3/3.4 — this script provides the
+# before/after PeerId capture is a separate check — this script provides the
 # checksum half of that evidence.
 #
 # Usage (host, as root):
@@ -57,8 +57,8 @@
 #                                injectable commands (lets tests run the full
 #                                logic unprivileged; default chown/stat/sha256sum)
 #
-# DEFAULT PATHS (extensible flat list of paths, no logic — task 3.2 appended
-# the one-shot tool image outputs per design D6):
+# DEFAULT PATHS (extensible flat list of paths, no logic — it includes
+# the one-shot tool image outputs):
 #   1. $SEAD_DATA_PATH       shared sead_data volume contents (databases; a
 #                            --key-index-db at the documented
 #                            /data/org-key-index.db convention lives here)
@@ -68,7 +68,7 @@
 #   3. $SEAD_KEYS_DIR        one-shot tool --out-file output dir
 #   4. $SEAD_KEY_INDEX_DB    per-file path for a key-index db elsewhere
 #
-# ONE-SHOT TOOL IMAGES (design D6) and what they write on disk:
+# ONE-SHOT TOOL IMAGES and what they write on disk:
 #   keygen        stdout only — nothing to migrate
 #   gen-token     --out-file <path> (default stdout); keep outputs under
 #                 $SEAD_KEYS_DIR or pass the operator-chosen dir as a PATH
@@ -85,8 +85,9 @@
 # bash is not installed. Paths containing whitespace are not supported by the
 # default list; pass such paths as positional arguments.
 #
-# Vendored from the SEAD source repository at tag v0.1.0 (commit ec5f8a4),
-# file scripts/migrate-sead-ownership.sh, with no change but this header.
+# Copied from stardome-sead-private at tag v0.1.0 (commit ec5f8a4), with
+# comments and log text reworded to drop internal references; no command
+# changed. Do not edit this copy here: change the source and copy it again.
 # The header sits below the help text, since --help prints lines 2-86.
 # In this repository, image-user.env sits next to this script: pass
 # IMAGE_USER_ENV=scripts/image-user.env (see the README, "Moving a node to
@@ -100,7 +101,7 @@ usage() {
     sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//'
 }
 
-# --- target identity: sourced from image-user.env, never hard-coded (D2) ---
+# --- target identity: sourced from image-user.env, never hard-coded ---
 IMAGE_USER_ENV="${IMAGE_USER_ENV:-$(dirname "$SCRIPT_DIR")/image-user.env}"
 if [ ! -f "$IMAGE_USER_ENV" ]; then
     echo "ERROR: image-user.env not found at $IMAGE_USER_ENV (set IMAGE_USER_ENV)" >&2
@@ -115,7 +116,7 @@ TARGET="$SEAD_UID:$SEAD_GID"
 
 # --- tunables ---
 DRY_RUN=0
-LEGACY_UIDS="${LEGACY_UIDS:-100 0}"   # D1: Alpine -S sead (100) + root (0)
+LEGACY_UIDS="${LEGACY_UIDS:-100 0}"   # legacy owners: Alpine -S sead (100) + root (0)
 CHOWN_CMD="${CHOWN_CMD:-chown}"
 STAT_CMD="${STAT_CMD:-stat}"
 SHA_CMD="${SHA_CMD:-sha256sum}"
@@ -159,7 +160,7 @@ fi
 log() { printf '%s\n' "$*"; }
 
 key_checksum() {
-    # D5: log path + checksum so task 3.3 can diff before/after evidence.
+    # Log path + checksum so before/after evidence can be diffed.
     [ -f "$GOSSIP_IDENTITY_KEY_FILE" ] || return 0
     log "[key] checksum ($1): $("$SHA_CMD" "$GOSSIP_IDENTITY_KEY_FILE")"
 }
@@ -225,5 +226,5 @@ log "[summary] scanned=$scanned relabelled=$changed already_migrated=$((scanned 
 if [ "$foreign" -gt 0 ]; then
     log "[summary] $foreign file(s) have unexpected owners and were NOT touched — review them manually."
 fi
-log "[done] migration complete; restart the stack and verify the PeerId is unchanged (task 3.3)."
+log "[done] migration complete; restart the stack and verify the PeerId is unchanged."
 exit 0

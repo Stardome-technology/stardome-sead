@@ -456,7 +456,8 @@ images can't read or write files `10001` owns.
 
 So change the owners **in the same step as the switch to the `v0.1.0`
 images, never before**, with the stack stopped. `scripts/migrate-sead-ownership.sh`,
-copied unchanged from the SEAD source repository at `v0.1.0`, does it: it
+copied from the SEAD source repository at `v0.1.0` with only its comments and
+log text reworded, does it: it
 gives `10001:10001` to each file owned by uid `100` or `0`, leaves any other
 owner alone and lists it as `[foreign]`, and logs the gossip identity key's
 checksum before and after. A second run changes nothing.
