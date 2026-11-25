@@ -220,11 +220,12 @@ environment, so `docker inspect` of edge-service shows none.
   without its keys, since Compose no longer passes the inline `--signing-key`,
   `--org-signing-key` and `--org-public-key` flags it would fall back to.
 
-> **Known gap:** the gateway still reads `SEAD_AUTH_SECRET`,
-> `GATEWAY_EDGE_TOKENS` and `GATEWAY_PEER_TOKEN` from environment variables,
-> so anyone who can run `docker inspect` on the gateway container can read
-> them. Restrict access to the Docker daemon on the host until the gateway can
-> read them from files.
+> **Closed with gateway `v0.1.0`:** the gateway now accepts the Docker `_FILE`
+> convention for `SEAD_AUTH_SECRET`, `GATEWAY_EDGE_TOKENS`, `GATEWAY_PEER_TOKEN`
+> and `GATEWAY_METRICS_TOKEN` (set `*_FILE` to a container path; `./secrets/` is
+> bind-mounted at `/etc/gateway/certs:ro`, and an unreadable file fails the
+> gateway at startup rather than falling back). Set the `*_FILE` variables
+> instead of the inline ones to keep the secrets out of `docker inspect`.
 
 > **The org signing key on the host is a deliberate risk.** edge-service signs
 > pin and auth tokens with the org secret key, so every edge host of an org
