@@ -466,6 +466,40 @@ node sets `COMPOSE_PROFILES=edge` in its `.env` before it deploys this
 version.** Without it, a `docker compose down` leaves a running edge-service
 orphaned, and a later `up -d` keeps its old image and environment.
 
+### Image pins
+
+`compose.production.yaml` and `compose.relay.yaml` pin each image as
+`<image>:X.Y.Z@sha256:<digest>`: a release tag and the digest of the
+multi-arch index ghcr.io serves for it. Docker pulls by the digest, so a node
+runs that build until the pin is bumped here. The Compose config check in CI
+fails on any image in either file without a tag and an `@sha256:` digest.
+Which tags exist, and which ones a node may pin, are set in
+[docs/image-tags.md](docs/image-tags.md#what-a-node-pins).
+
+To bump an image to a new release `X.Y.Z`:
+
+1. Read the digest of its index, and check the index lists `linux/amd64` and
+   `linux/arm64`:
+
+   ```bash
+   docker buildx imagetools inspect ghcr.io/stardome-technology/stardome-sead/sead-core:X.Y.Z
+   ```
+
+   Take the `Digest:` line under `Name:`, not a per-platform digest under
+   `Manifests:`.
+2. On the image's `image:` line, replace both the tag before `@sha256:` and
+   the digest after it. Bump gossip-node in both `compose.production.yaml` and
+   `compose.relay.yaml`.
+3. Check the result lists the new tag and digest:
+
+   ```bash
+   docker compose -f compose.yaml -f compose.production.yaml config --images
+   docker compose -f compose.relay.yaml config --images
+   ```
+
+4. Open a PR. Once it merges, each node pulls the new build with `pull` and
+   `up -d`, as in [Start](#start).
+
 ### Start
 
 Start the stack:

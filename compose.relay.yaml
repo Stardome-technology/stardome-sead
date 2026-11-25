@@ -23,7 +23,7 @@ name: stardome-sead
 
 services:
   gossip-node:
-    image: ghcr.io/stardome-technology/stardome-sead/gossip-node:latest
+    image: ghcr.io/stardome-technology/stardome-sead/gossip-node:0.1.0@sha256:8d33f556a3d7ec29ce033b379650be86149eaf91a832087010de652395d39865
     container_name: stardome-relay
     # Publish the libp2p TCP port so other nodes reach this relay at the
     # node's LAN/mesh IP.
