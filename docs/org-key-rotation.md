@@ -246,11 +246,11 @@ docker compose -f docker-compose.remote.yml up -d
 > `GOSSIP_ORG_ID`/`GOSSIP_OBSERVE_ORGS` silently stops cross-edge replication
 > of the new org's events, with **no error surfaced**.
 
-> Always `cd` into the compose directory first: `GOSSIP_IDENTITY_DIR` defaults
-> to `~/.sead/gossip-keys` resolved **relative to the compose working
-> directory** — running `up -d` from elsewhere rotates the libp2p PeerID and
-> breaks every published `GOSSIP_BOOTSTRAP` entry
-> ([setup-vps.md §5.2](setup-vps.md)).
+> Recreate with the same `GOSSIP_IDENTITY_DIR` as before, an absolute path
+> (default `/var/lib/sead/gossip-keys`): gossip-node reads its libp2p identity
+> key from there, and a directory without it makes gossip-node generate a new
+> key, which changes the PeerId and breaks every published `GOSSIP_BOOTSTRAP`
+> entry ([README — Gossip identity key](../README.md#gossip-identity-key)).
 
 Recreate the gossip nodes with the stagger described in section 7.
 

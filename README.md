@@ -245,9 +245,10 @@ environment, so `docker inspect` of edge-service shows none.
 > auto-discover peers on the same subnet. On **Internet-facing** edges also set
 > `GOSSIP_ADVERTISE=/ip4/<public_ip>/tcp/31002` — without it the node advertises its
 > container IP and every peer dial fails ("no good addresses" / "dial to self") — and
-> keep `GOSSIP_IDENTITY_KEY_FILE` **inside** the mounted volume dir
-> (`/data/gossip-keys/gossip-identity.key`); a path outside it regenerates the PeerId
-> on every container recreate and invalidates every published bootstrap multiaddr.
+> keep `GOSSIP_IDENTITY_KEY_FILE` **inside** `/data/gossip-keys`, the directory
+> mounted from `GOSSIP_IDENTITY_DIR` (`/data/gossip-keys/gossip-identity.key`); a path
+> outside it regenerates the PeerId on every container recreate and invalidates every
+> published bootstrap multiaddr. See [Gossip identity key](#gossip-identity-key).
 
 > **How a node finds the orgs it observes — four layers.** SEPARATE **networking** from
 > **SEAD authority**. There are four distinct layers; the first two are transport, the last
@@ -314,6 +315,83 @@ environment, so `docker inspect` of edge-service shows none.
 > signature-verification path. Genuinely invalid events are rejected and
 > dropped, never retried.
 
+### Gossip identity key
+
+gossip-node's libp2p identity key, `gossip-identity.key`, fixes the node's
+PeerId, which other nodes hardcode in `GOSSIP_BOOTSTRAP` and which the org's
+replication endpoint catalog publishes. Compose bind-mounts the host
+directory `GOSSIP_IDENTITY_DIR` at `/data/gossip-keys`, in `compose.yaml`
+and in `compose.relay.yaml`. The key lives only in that host directory, not
+in a named volume, so `docker compose down -v` leaves it in place.
+
+`GOSSIP_IDENTITY_DIR` defaults to `/var/lib/sead/gossip-keys`, an absolute
+path, so every user who runs `docker compose` mounts the same key. Earlier
+versions defaulted to `~/.sead/gossip-keys`, which the shell expands to the
+`$HOME` of the user who runs `docker compose`. `sudo` sets `HOME=/root`, so
+`sudo docker compose up -d` mounted `/root/.sead/gossip-keys` instead, where
+gossip-node found no key, generated a new one, and the PeerId changed.
+
+On a fresh node, gossip-node creates the key on its first start. On a node
+that already has a PeerId, **copy the key once, before the first `up` with
+this version.** This applies to every relay that runs `compose.relay.yaml`
+as much as to every SEAD node: a relay's PeerId is the bootstrap anchor that
+other nodes hardcode, so a relay that generates a new key cuts off every
+node that dials it.
+
+1. Find the current key. With `GOSSIP_IDENTITY_DIR` unset, it is
+   `gossip-identity.key` in `~/.sead/gossip-keys` of the user who ran
+   `docker compose`, such as `/home/ubuntu/.sead/gossip-keys`, and not
+   `/root/.sead/gossip-keys`, even when you run the next steps under `sudo`.
+   With `GOSSIP_IDENTITY_DIR` set in `.env`, it is in that directory.
+2. Copy it, keeping its owner, mode and bytes:
+
+   ```bash
+   sudo mkdir -p /var/lib/sead/gossip-keys
+   sudo cp -a /home/ubuntu/.sead/gossip-keys/gossip-identity.key /var/lib/sead/gossip-keys/
+   ```
+
+   Copy the file as it is, with `cp -a`: never decode, re-encode or rewrite
+   it. It holds 68 bytes, a protobuf-encoded Ed25519 private key, and any
+   other content gives a different PeerId or none.
+3. Check it:
+
+   ```bash
+   sudo stat -c '%u:%g %a %s' /var/lib/sead/gossip-keys/gossip-identity.key
+   # → 10001:10001 600 68   images from v0.1.0 on, today's `latest` included
+   # → 0:0 600 68           older images, under the production override
+   ```
+
+   On native Docker Engine on Linux, the owner depends on gossip-node's
+   image. From `v0.1.0` on, today's `latest` included, the image runs as
+   `10001:10001`, so the key must belong to `10001`, at mode `0600`. Older
+   images run gossip-node as root, so the key stays owned `root:root`, uid
+   and gid `0`, at mode `0600`. The production override drops all
+   capabilities, so even root can't read a key it doesn't own: with the
+   wrong owner, gossip-node exits at start and crash-loops. `stat` prints
+   numeric IDs since the host may have no user `10001`.
+
+   **Docker Desktop** reads and writes mounted host files as the user who
+   runs Docker Desktop, not as root, so on macOS a directory or key owned by
+   root gives `permission denied`, and gossip-node retries and never starts.
+   There, give the directory and the key to that user, keeping mode `0600` on
+   the key: `sudo chown -R "$(id -u):$(id -g)" /var/lib/sead/gossip-keys`.
+4. Set `GOSSIP_IDENTITY_DIR=/var/lib/sead/gossip-keys` in `.env`, or delete
+   any `GOSSIP_IDENTITY_DIR` line there so the default applies, then recreate
+   gossip-node, or the relay, and check that its startup log shows the same
+   PeerId as before:
+
+   ```bash
+   docker compose up -d gossip-node
+   docker compose logs gossip-node | grep "peer ID"
+   ```
+
+   For the relay, use `docker compose -f compose.relay.yaml up -d` and
+   `docker compose -f compose.relay.yaml logs gossip-node | grep "peer ID"`.
+
+Keep the old copy until the PeerId checks out, then delete it, so no second
+node starts with the same identity. Never give two running nodes one key: they
+would share a PeerId.
+
 ### Container hardening
 
 `compose.production.yaml` hardens every service:
@@ -348,10 +426,11 @@ Exceptions:
   dropped even root can't bypass file permissions — pin-service writes its
   CID-tracker DB into the `sead_data` volume, owned `100:101`. Without
   capabilities, root in the remaining containers can't bypass file
-  permissions either. gossip-node has no `user:` override: it writes its
-  identity key into the root-owned directory mounted at `/data/gossip-keys`,
-  and as another user it couldn't, so its PeerId would change on every
-  recreate.
+  permissions either. gossip-node has no `user:` override: images before
+  `v0.1.0` run it as root and those from `v0.1.0` as `10001:10001`, and its
+  identity key on the host, at mode `0600`, must belong to that user
+  ([Gossip identity key](#gossip-identity-key)); under any other user
+  gossip-node can't read it, exits at start and crash-loops.
 - **On an existing deployment, `chown 100:101 /data/pin-service.db*` once**
   before first start under this overlay: volumes created by older stacks may
   hold a root-owned pin-service DB that uid 100 can't write.
@@ -463,7 +542,8 @@ curl -k https://localhost:30080/health
 | `GOSSIP_OBSERVE_ORGS` | gossip-node | No | — | Comma-separated 64-hex org_ids this node observes (own org always observed). Enables cross-node sync |
 | `GOSSIP_BOOTSTRAP` | gossip-node | No | — | Comma-separated libp2p multiaddrs of other nodes to dial at startup (`/ip4/<ip>/tcp/31002/p2p/<peerid>`). A **transport entry point** to join the mesh — not org-specific; any reachable peer works. mDNS/DHT also discover peers |
 | `GOSSIP_ADVERTISE` | gossip-node, relay | **†** | — | Multiaddr this node advertises to peers (`/ip4/<public_ip>/tcp/31002`). Without it the node advertises its container IP and every peer dial fails ("no good addresses" / "dial to self") |
-| `GOSSIP_IDENTITY_KEY_FILE` | gossip-node | No | `/data/gossip-keys/gossip-identity.key` | Persistent libp2p identity key path. Must be **inside** the mounted `gossip_data` volume dir — a path outside it is not persisted, so the PeerId is regenerated on every recreate and published bootstrap multiaddrs go stale ("peer id mismatch") |
+| `GOSSIP_IDENTITY_DIR` | gossip-node, relay | No | `/var/lib/sead/gossip-keys` | Host directory bind-mounted at `/data/gossip-keys`, which holds the persistent libp2p identity key. Keep it an absolute path, so every user who runs `docker compose` mounts the same key ([Gossip identity key](#gossip-identity-key)) |
+| `GOSSIP_IDENTITY_KEY_FILE` | gossip-node, relay | No | `/data/gossip-keys/gossip-identity.key` | Persistent libp2p identity key path inside the container. Must be **inside** `/data/gossip-keys`, the directory mounted from `GOSSIP_IDENTITY_DIR` — a path outside it is not persisted, so the PeerId is regenerated on every recreate and published bootstrap multiaddrs go stale ("peer id mismatch") |
 | `GOSSIP_LISTEN` | gossip-node | No | `/ip4/0.0.0.0/tcp/31002` | gossip-node libp2p listen multiaddr |
 | `GOSSIP_HEARTBEAT_SEC` | gossip-node | No | `10` | Frontier publish interval (seconds) |
 | `GOSSIP_CORE` | gossip-node | No | `sead-core:50051` | Local sead-core gRPC target |
