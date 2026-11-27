@@ -1,6 +1,8 @@
 # Development overlay for compose.yaml: builds the images from local source
-# checkouts, logs at debug level, and publishes each service's gRPC port on
-# localhost for debugging tools such as grpcurl.
+# checkouts, logs at debug level, publishes each service's gRPC port on
+# localhost for debugging tools such as grpcurl, turns gossip-node's mDNS on
+# for peers on the same LAN, and lets the gateway accept self-signed peer
+# certificates. Production keeps all of these off.
 # Usage:
 #   docker compose -f compose.yaml -f compose.development.yaml up -d --build
 #
@@ -60,6 +62,8 @@ services:
     image: gossip-node:dev
     environment:
       LOG_LEVEL: debug
+      GOSSIP_MDNS: "true"
+      GOSSIP_DHT: "true"
 
   gateway:
     build:
@@ -68,5 +72,13 @@ services:
     image: stardome-sead-gateway:dev
     environment:
       GATEWAY_LOG_LEVEL: debug
+      GATEWAY_PEER_TLS_INSECURE: "true"
     ports:
       - "127.0.0.1:50054:50054"
+
+# Docker can't forward a published port into a container that is only on an
+# internal network, so in development `backend` isn't internal, and the gRPC
+# ports above reach sead-core, edge-service and source-data-service.
+networks:
+  backend:
+    internal: false

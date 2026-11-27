@@ -16,6 +16,12 @@
 # Limits: every service gets 256 MiB of memory, half a CPU and 256 processes;
 # edge-service gets 512 MiB. They are sized for 1-vCPU, 2 GiB hosts; raise them
 # in proportion on larger hosts.
+#
+# Network exposure (see docs/setup-vps.md, "Network exposure"): gossip-node runs
+# with mDNS off and the DHT on, and the gateway verifies its peer gateways' TLS
+# certificates. These are literal values, not `.env` variables, so a node can't
+# carry the development settings into production. CI fails the build unless
+# they hold and the only published ports are 30080 and 31002.
 
 x-hardening: &hardening
   cap_drop: [ALL]
@@ -72,6 +78,13 @@ services:
     tmpfs:
       - /tmp
       - /run
+    environment:
+      # mDNS is link-local multicast: on a Docker bridge it finds no peer
+      # across the Internet, so production relies on GOSSIP_BOOTSTRAP and the
+      # DHT. The DHT stays on: it bootstraps only from GOSSIP_BOOTSTRAP, so it
+      # discovers peers within the SEAD mesh, not on the public IPFS DHT.
+      GOSSIP_MDNS: "false"
+      GOSSIP_DHT: "true"
 
   gateway:
     image: ghcr.io/stardome-technology/stardome-sead-gateway:0.1.0@sha256:5f9046952a2f3c7bd789996ef8c473659d53973447da099111a4b66ce185414f
@@ -79,3 +92,7 @@ services:
     tmpfs:
       - /tmp
       - /run
+    environment:
+      # Verify peer gateways' certificates: use public certificates, or set
+      # GATEWAY_PEER_CA_CERT for peers on a private CA.
+      GATEWAY_PEER_TLS_INSECURE: "false"
