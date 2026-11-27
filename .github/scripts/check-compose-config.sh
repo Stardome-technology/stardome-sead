@@ -19,6 +19,17 @@
 # The production pair runs with the `edge` profile, so the checks cover
 # edge-service; a last check confirms that without the profile `config` leaves
 # edge-service out, so a fresh node's `up -d` doesn't start it.
+#
+# The production pair also gets the exposure guard, on its resolved config:
+#   - the published ports are exactly 30080 and 31002;
+#   - no published port binds 127.0.0.1;
+#   - the `backend` network is `internal: true`, and sead-core, edge-service
+#     and source-data-service are on it alone;
+#   - gossip-node has GOSSIP_MDNS=false and GOSSIP_DHT=true, and its command
+#     passes no --mdns or --dht flag, which would override them;
+#   - the gateway has GATEWAY_PEER_TLS_INSECURE=false.
+# Two self-tests then add an overlay that publishes one more port, and one that
+# binds a port to 127.0.0.1, and pass only if the guard rejects each of them.
 set -u
 
 cd "$(dirname "$0")/../.."
@@ -109,6 +120,86 @@ elif printf '%s\n' "$services" | grep -qx 'edge-service'; then
 else
   pass "production without the edge profile: config --services leaves edge-service out"
 fi
+
+# Prints one "guard:" line per broken rule of the resolved config in $1, and
+# fails when any rule is broken or jq can't read the config.
+exposure_guard() {
+  local config="$1" broken=0 msg
+  if ! jq -r '
+    def env($s; $k): (.services[$s].environment // {})[$k];
+    ([.services[] | (.ports // [])[] | .published | tostring] | unique) as $published
+    | (if $published != ["30080", "31002"]
+       then "published ports are \($published | join(", ")), not exactly 30080 and 31002" else empty end),
+      (.services | to_entries[] | .key as $svc | (.value.ports // [])[]
+       | select((.host_ip // "") | startswith("127."))
+       | "\($svc) binds \(.host_ip):\(.published) to the loopback interface"),
+      (if .networks.backend.internal != true then "network backend is not internal: true" else empty end),
+      (["sead-core", "edge-service", "source-data-service"][] as $svc
+       | (.services[$svc].networks // {} | keys) as $nets
+       | if $nets != ["backend"] then "\($svc) is on \($nets | join(", ")), not on backend alone" else empty end),
+      (if env("gossip-node"; "GOSSIP_MDNS") != "false"
+       then "gossip-node GOSSIP_MDNS is \(env("gossip-node"; "GOSSIP_MDNS")), not false" else empty end),
+      (if env("gossip-node"; "GOSSIP_DHT") != "true"
+       then "gossip-node GOSSIP_DHT is \(env("gossip-node"; "GOSSIP_DHT")), not true" else empty end),
+      (if ((.services["gossip-node"].command // []) | join(" ") | test("--(mdns|dht)\\b"))
+       then "gossip-node command passes --mdns or --dht, which overrides its environment" else empty end),
+      (if env("gateway"; "GATEWAY_PEER_TLS_INSECURE") != "false"
+       then "gateway GATEWAY_PEER_TLS_INSECURE is \(env("gateway"; "GATEWAY_PEER_TLS_INSECURE")), not false" else empty end)
+  ' "$config" >"$config.guard"; then
+    echo "  guard: jq can't read $config"
+    return 1
+  fi
+  while IFS= read -r msg; do
+    [ -n "$msg" ] || continue
+    echo "  guard: $msg"
+    broken=$((broken + 1))
+  done <"$config.guard"
+  [ "$broken" -eq 0 ]
+}
+
+production_files="--profile edge -f compose.yaml -f compose.production.yaml"
+
+# shellcheck disable=SC2086
+if compose "$env_file" $production_files config --format json >"$tmp/production.json" 2>"$tmp/out"; then
+  if exposure_guard "$tmp/production.json"; then
+    pass "production: exposure guard holds (ports 30080 and 31002 only, backend internal, mDNS off, DHT on, peer TLS verified)"
+  else
+    fail "production: exposure guard broken (lines above)"
+  fi
+else
+  fail "production: config --format json exits non-zero"; cat "$tmp/out"
+fi
+
+# Self-tests: each overlay breaks one rule, and the guard must reject it.
+cat >"$tmp/extra-port.yaml" <<'YAML'
+services:
+  gateway:
+    ports:
+      - "8080:8080"
+YAML
+cat >"$tmp/loopback.yaml" <<'YAML'
+services:
+  gateway:
+    ports:
+      - "127.0.0.1:30080:30080"
+YAML
+for test in "extra-port:published ports are" "loopback:to the loopback interface"; do
+  name="${test%%:*}" expect="${test#*:}"
+  echo "self-test $name: the guard must reject this config:"
+  # shellcheck disable=SC2086
+  if ! compose "$env_file" $production_files -f "$tmp/$name.yaml" config --format json >"$tmp/$name.json" 2>"$tmp/out"; then
+    fail "self-test $name: config --format json exits non-zero"; cat "$tmp/out"
+  elif exposure_guard "$tmp/$name.json" >"$tmp/$name.out"; then
+    cat "$tmp/$name.out"
+    fail "self-test $name: the guard accepts a config it must reject"
+  elif ! grep -q "$expect" "$tmp/$name.out"; then
+    cat "$tmp/$name.out"
+    fail "self-test $name: the guard rejects it, but not with \"$expect\""
+  else
+    cat "$tmp/$name.out"
+    pass "self-test $name: the guard rejects it"
+  fi
+done
 
 check "relay" "$relay_required" -f compose.relay.yaml
 
