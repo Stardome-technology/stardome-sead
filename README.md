@@ -114,13 +114,19 @@ state and continue at the next unused leaf.
 
 Consequences for operations:
 
-- **`edge.db` is key material.** The `sead_data` volume holding `edge.db`
-  must be backed up with the same care as the keys themselves.
-- **`docker compose down -v`, or restoring a stale `edge.db` backup, is a
+- **`edge.db` is key material.** The `edge_data` volume holding `edge.db`
+  must be treated with the same care as the keys themselves. It is
+  deliberately **excluded** from `scripts/backup_databases.sh` — a stale
+  `edge.db` backup is dangerous, so no routine backup restores it (see
+  [Volumes](#volumes)).
+- **Losing `edge_data`, or restoring a stale `edge.db` backup, is a
   key-rotation event** for both the org and the edge key — not a
   re-provisioning step. If the volume is lost, revoke and re-issue the
   affected keys (org revocation / edge revocation + new `edge_authorization`)
-  instead of reusing them from a reset index.
+  instead of reusing them from a reset index. `edge_data` is declared
+  `external: true`, so `docker compose down -v` no longer deletes it — that
+  is the point of the per-service layout — but `-v` still destroys the other
+  three databases (see [Volumes](#volumes)).
 - Deployments that published commits **before** state persistence existed must
   be seeded or rotated first (the `edge-index-audit` tool in the
   `stardome-sead-private` repo audits published leaf indices per key and can
@@ -152,13 +158,60 @@ Consequences for operations:
 How the images on ghcr.io are tagged, and which image reference a node pins,
 are set in [docs/image-tags.md](docs/image-tags.md).
 
-All of them set the project name `stardome-sead`, so the `stardome-sead_sead_data`
-volume, and with it the XMSS key indices in `edge.db`, carry over from earlier
-deployments. `.env.example` sets `COMPOSE_FILE=compose.yaml:compose.production.yaml`,
+All of them set the project name `stardome-sead`, so the per-service volumes
+(`stardome-sead_sead_core_data`, `stardome-sead_pin_data`,
+`stardome-sead_sourcedata_data`) carry over from earlier deployments, and with
+them the XMSS key indices in `edge.db` — which now lives on its own `edge_data`
+volume (see [Volumes](#volumes)). `.env.example` sets `COMPOSE_FILE=compose.yaml:compose.production.yaml`,
 so with it copied to `.env` a plain `docker compose up -d` in the clone uses the
 production pair. With a required variable (marked **†** in the
 [configuration reference](#configuration-reference)) unset or empty, every
 `docker compose` command stops before starting anything and names it.
+
+### Volumes
+
+Each service keeps its database on its own named volume — no service shares
+another's volume:
+
+| Volume | Service | Database |
+|--------|---------|----------|
+| `sead_core_data` | sead-core | `/data/sead.db` |
+| `edge_data` | edge-service | `/data/edge.db` |
+| `pin_data` | pin-service | `/data/pin-service.db` |
+| `sourcedata_data` | source-data-service | `/data/sourcedata.db` |
+
+`edge_data` is special: it is declared `external: true` with the fixed name
+`stardome-sead_edge_data`, so Compose never creates and never removes it.
+
+- **Create it before the first `up`** on a fresh node or after running
+  `scripts/migrate_volumes.sh` on an existing one:
+  `docker volume create stardome-sead_edge_data`. If it is missing, `up`
+  fails with "external volume not found" before edge-service starts. That
+  fail-loud behavior is intended: an empty `edge.db` would make the edge
+  sign from index 0, reusing spent XMSS leaves — a missing volume must stop
+  the stack, never start it empty.
+- **Never restore a stale `edge.db` into it.** Losing `edge_data` or
+  restoring a stale `edge.db` backup is a key-rotation event — see
+  [XMSS key state persistence](#xmss-key-state-persistence-org-and-edge-keys).
+- **⚠️ Do not run `docker compose down -v` on a deployed node.** It deletes
+  the three project-scoped volumes — `sead_core_data`, `pin_data` and
+  `sourcedata_data` — along with every database in them. `edge_data`
+  survives `down -v` precisely because it is external, but there is no
+  routine operation that needs `-v`.
+- `scripts/backup_databases.sh` backs up `sead.db`, `sourcedata.db` and
+  `pin-service.db` to a host directory (`BACKUP_ROOT`, default
+  `/var/backups/sead`) after a WAL checkpoint and verifies each copy with
+  `PRAGMA integrity_check`. It enumerates that explicit list and refuses to
+  touch `edge.db` — by construction, not by convention. What it covers,
+  what it excludes and why, and where it writes:
+  [docs/backup-runbook.md](docs/backup-runbook.md).
+- `scripts/migrate_volumes.sh` moves data off the old shared `sead_data`
+  volume into this layout: checkpoint, copy, verify (integrity + row counts),
+  and only then rename the old `edge.db` to `edge.db.migrated` — nothing is
+  deleted, and a rollback fails loudly instead of using stale files. Run it
+  with `--dry-run` first. The full procedure for updating a deployed node —
+  verify the working tree, pull, stop, create volumes, migrate, verify — is
+  [docs/update-runbook.md](docs/update-runbook.md).
 
 ### Configure
 
@@ -417,8 +470,8 @@ would share a PeerId.
   and the gateway. edge-service gets no `/run` tmpfs, since Compose mounts its
   key files under `/run/secrets/`.
 
-Each service writes only to its volumes. SQLite's `-wal` and `-shm` files stay
-next to their databases in the `sead_data` volume, never on a `tmpfs`, so a
+Each service writes only to its volume. SQLite's `-wal` and `-shm` files stay
+next to their databases in each service's own volume, never on a `tmpfs`, so a
 recreate keeps every committed write.
 
 It also limits every service's resources:
@@ -439,7 +492,7 @@ Exceptions:
   image sets that user itself, so the overlay sets no `user:`. With all
   capabilities dropped, even root couldn't bypass file permissions, so each
   file a service reads or writes on native Docker Engine on Linux must belong
-  to `10001`: the `sead_data` volume's databases, the key files, the gossip
+  to `10001`: each service's data volume and its databases, the key files, the gossip
   identity key ([Gossip identity key](#gossip-identity-key)) and the gateway's
   TLS key. A node set up with older images has them owned by uid `100` or by
   root: run the migration in
@@ -598,6 +651,21 @@ To bump an image to a new release `X.Y.Z`:
    `up -d`, as in [Start](#start).
 
 ### Start
+
+**On a fresh node, create the external `edge_data` volume once before the
+first `up`.** It is declared `external: true` in `compose.yaml`, so Compose
+never creates it, and `up` fails with "external volume not found" before any
+container starts:
+
+```bash
+docker volume create stardome-sead_edge_data
+```
+
+The command is idempotent — re-running it on an already-deployed node is a
+no-op. Why the volume is external (an empty `edge.db` would make the edge
+sign from spent XMSS leaves, so a missing volume must stop the stack) is
+covered in [Volumes](#volumes); updating an existing node instead of a fresh
+install is [docs/update-runbook.md](docs/update-runbook.md).
 
 Start the stack:
 
@@ -1073,8 +1141,8 @@ curl $CURL_TLS https://localhost:30080/edges/<org_id_hex>/<edge_id_hex> \
 ### 3d — Bring up edge-service
 
 The org and edge are now enrolled. **Before the first start, seed the org key
-index**: copy the `org-key-index.db` produced in 3b/3c to the edge's data
-volume as its initial `edge.db` (fresh edge — plain `cp`; merge into an
+index**: copy the `org-key-index.db` produced in 3b/3c to the edge's
+`edge_data` volume as its initial `edge.db` (fresh edge — plain `cp`; merge into an
 existing `edge.db` via `edge-index-audit --seed`). The org signer then
 resumes at leaf ≥ 2 instead of reusing the bootstrap leaves. In the merge case
 `--seed` applies only to the **edge** key's own row (it derives the index from
