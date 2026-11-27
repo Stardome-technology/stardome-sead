@@ -76,12 +76,22 @@ declare -A SRC_FOR=(
 # Docker's volume tree). Configurable via the BACKUP_ROOT environment
 # variable; each run writes into a timestamped subdirectory of it (3.3).
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/sead}"
-# Production services run as `user: "100:101"` (syslog:syslog) — same
-# convention as migrate_volumes.sh task 2.4. Task 3.2 uses this ONLY to
+# Same owner as migrate_volumes.sh task 2.4. Task 3.2 uses it ONLY to
 # re-own -wal/-shm sidecars that a checkpoint may create as root (see
 # backup_one_db); the backup copies themselves are plain snapshot files.
-OWN_UID=100
-OWN_GID=101
+# Owner of the files the services write: the image user that
+# scripts/image-user.env declares (10001:10001 from v0.1.0), read the way
+# scripts/migrate-sead-ownership.sh reads it, so a change of image user
+# changes this script too. IMAGE_USER_ENV overrides the path.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE_USER_ENV="${IMAGE_USER_ENV:-${SCRIPT_DIR}/image-user.env}"
+[ -f "$IMAGE_USER_ENV" ] \
+  || { echo "ERROR: image-user.env not found at ${IMAGE_USER_ENV} (set IMAGE_USER_ENV)" >&2; exit 1; }
+OWN_UID="$(sed -n 's/^[[:space:]]*SEAD_UID=//p' "$IMAGE_USER_ENV" | tail -n1)"
+OWN_GID="$(sed -n 's/^[[:space:]]*SEAD_GID=//p' "$IMAGE_USER_ENV" | tail -n1)"
+case "${OWN_UID}${OWN_GID}" in
+  *[!0-9]*|"") echo "ERROR: SEAD_UID/SEAD_GID missing or non-numeric in ${IMAGE_USER_ENV}" >&2; exit 1 ;;
+esac
 
 DRY_RUN=0
 
@@ -238,7 +248,7 @@ backup_one_db() {
   #    NOT tolerated: it means the source db is broken -> fail closed.
   #    Note which sidecars exist first: if the checkpoint (run as root)
   #    creates -wal/-shm that were absent, they would be root-owned and the
-  #    100:101 services could not use them afterwards.
+  #    services, running as the image user, could not use them afterwards.
   had_sidecar=("$([ -e "${src}-wal" ] && echo wal || true)" "$([ -e "${src}-shm" ] && echo shm || true)")
   rc=0
   out="$(sqlite3 "$src" "PRAGMA wal_checkpoint(TRUNCATE);" 2>&1)" || rc=$?

@@ -68,10 +68,20 @@ declare -A DEST_FOR=(
 # Free-space heuristic: require at least this many times the source data size
 # free on every destination filesystem (live state is ~10 MB today).
 FREE_SPACE_MULTIPLIER=2
-# Ownership of the migrated files (task 2.4): production services run as
-# `user: "100:101"` (syslog:syslog) and the source files are owned 100:101.
-OWN_UID=100
-OWN_GID=101
+# Ownership of the migrated files (task 2.4).
+# Owner of the files the services write: the image user that
+# scripts/image-user.env declares (10001:10001 from v0.1.0), read the way
+# scripts/migrate-sead-ownership.sh reads it, so a change of image user
+# changes this script too. IMAGE_USER_ENV overrides the path.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE_USER_ENV="${IMAGE_USER_ENV:-${SCRIPT_DIR}/image-user.env}"
+[ -f "$IMAGE_USER_ENV" ] \
+  || { echo "ERROR: image-user.env not found at ${IMAGE_USER_ENV} (set IMAGE_USER_ENV)" >&2; exit 1; }
+OWN_UID="$(sed -n 's/^[[:space:]]*SEAD_UID=//p' "$IMAGE_USER_ENV" | tail -n1)"
+OWN_GID="$(sed -n 's/^[[:space:]]*SEAD_GID=//p' "$IMAGE_USER_ENV" | tail -n1)"
+case "${OWN_UID}${OWN_GID}" in
+  *[!0-9]*|"") echo "ERROR: SEAD_UID/SEAD_GID missing or non-numeric in ${IMAGE_USER_ENV}" >&2; exit 1 ;;
+esac
 
 DRY_RUN=0
 
@@ -266,8 +276,8 @@ ${dest_counts}"
 }
 
 preserve_ownership() {
-  # Task 2.4: chown every copied file to 100:101 (syslog:syslog), matching
-  # the production `user: "100:101"` — a plain copy lands with the
+  # Task 2.4: chown every copied file to the image user (OWN_UID:OWN_GID,
+  # from image-user.env), the user every service runs as — a plain copy lands with the
   # invoker's ownership (root:root when run via sudo), which the services
   # could not write. Sidecars -wal/-shm are handled alongside the main db
   # (same convention as 2.2/2.3). chown is idempotent, so re-runs before
@@ -297,8 +307,9 @@ rename_migrated_marker() {
   # already succeeded for ALL databases — checkpoint_copy_verify fails closed
   # on the first bad copy, so a rename can never follow an unverified copy.
   # Rename, never delete (D2). Ownership note (task 2.4): mv preserves
-  # uid/gid, and the source edge.db is already 100:101 in production, so
-  # edge.db.migrated inherits ownership — no extra chown needed here.
+  # uid/gid, and the source edge.db is already owned by the image user in
+  # production, so edge.db.migrated inherits ownership — no extra chown
+  # needed here.
   local src_mp ext
   src_mp="$(volume_mountpoint "$SRC_VOL")"
   if [ ! -f "${src_mp}/edge.db" ] && [ -f "${src_mp}/edge.db.migrated" ]; then
