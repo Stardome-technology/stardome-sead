@@ -22,7 +22,7 @@ produce tokens for IPFS pinning.
 
 > **Go Gateway migration (phase 4.4):** the C++ services are **gRPC-only** and
 > publish no public HTTP ports. They are reachable only on the internal
-> `sead-network` bridge via the Go gateway. `auth-service` and `verifier-service`
+> `backend` network via the Go gateway. `auth-service` and `verifier-service`
 > are collapsed into the gateway (no longer standalone services). Health is
 > probed via `grpc.health.v1.Health`.
 
@@ -52,6 +52,14 @@ must be reachable from outside (open in the firewall / cloud security group):
 All other service ports (`50051`–`50055`) are **private** to the Docker network
 and should **not** be exposed publicly. If you only need local access, you can
 leave `30080` closed to the internet and reach it via `localhost`.
+
+The services run on two networks: `backend`, internal, with no route out of
+the host, and `public`, which only pin-service, gossip-node and the gateway
+join. CI fails unless production publishes exactly `30080` and `31002`, binds
+neither to `127.0.0.1`, keeps `backend` internal, turns gossip-node's mDNS off
+and has the gateway verify its peers' TLS. Who reaches each port, the exposure
+postures, a reverse proxy in front of the gateway and the state of `/metrics`
+are in [docs/setup-vps.md, "Network exposure"](docs/setup-vps.md#2-network-exposure).
 
 ---
 
@@ -138,7 +146,7 @@ Consequences for operations:
 |------|-----|
 | `compose.yaml` | Base file with every service; always combined with one overlay below |
 | `compose.production.yaml` | Overlay that runs the pre-built images from ghcr.io |
-| `compose.development.yaml` | Overlay that builds the images from local source checkouts (`SEAD_SOURCE_DIR`, `SEAD_GATEWAY_SOURCE_DIR`), logs at debug level and publishes the gRPC ports on `127.0.0.1`; it signs with real XMSS keys like production |
+| `compose.development.yaml` | Overlay that builds the images from local source checkouts (`SEAD_SOURCE_DIR`, `SEAD_GATEWAY_SOURCE_DIR`), logs at debug level, publishes the gRPC ports on `127.0.0.1`, turns gossip-node's mDNS on and lets the gateway accept self-signed peer certificates; it signs with real XMSS keys like production |
 | `compose.relay.yaml` | Standalone file for a relay-only bootstrap peer (gossip-node alone) |
 
 How the images on ghcr.io are tagged, and which image reference a node pins,
@@ -247,8 +255,9 @@ environment, so `docker inspect` of edge-service shows none.
 > `sead-sync/{org}` topic and publishes frontiers for it. Observation is
 > **unilateral** — no publisher consent needed, so each node simply lists the
 > orgs it wants to verify for. `GOSSIP_BOOTSTRAP` lists the other nodes'
-> libp2p multiaddrs (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also
-> auto-discover peers on the same subnet. On **Internet-facing** edges also set
+> libp2p multiaddrs (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); the DHT also
+> discovers peers through them, and in development mDNS finds peers on the same
+> subnet. On **Internet-facing** edges also set
 > `GOSSIP_ADVERTISE=/ip4/<public_ip>/tcp/31002` — without it the node advertises its
 > container IP and every peer dial fails ("no good addresses" / "dial to self") — and
 > keep `GOSSIP_IDENTITY_KEY_FILE` **inside** `/data/gossip-keys`, the directory
@@ -670,14 +679,17 @@ curl -k https://localhost:30080/health
 | `GOSSIP_HEARTBEAT_SEC` | gossip-node | No | `10` | Frontier publish interval (seconds) |
 | `GOSSIP_CORE` | gossip-node | No | `sead-core:50051` | Local sead-core gRPC target |
 | `GOSSIP_GATEWAY` | gossip-node | No | `gateway:50054` | Local gateway Sync gRPC target |
-| `GOSSIP_MDNS` | gossip-node | No | `true` | Enable mDNS LAN peer discovery |
-| `GOSSIP_DHT` | gossip-node | No | `true` | Enable Kademlia DHT peer discovery |
+| `GOSSIP_MDNS` | gossip-node | — | `false` in production, `true` in development | Enable mDNS LAN peer discovery. Set in each overlay, not read from `.env` |
+| `GOSSIP_DHT` | gossip-node | — | `true` in both overlays | Enable Kademlia DHT peer discovery. Set in each overlay, not read from `.env` |
 | `GOSSIP_PNET` | gossip-node | No | `false` | Enable private-network enforcement |
 | `SEAD_AUTH_SECRET` | gateway | **†** | — | Shared secret the gateway requires as `Authorization: Bearer <value>` on its public HTTPS endpoints. It guards the gateway's **public** API (the gRPC calls between the internal C++ services and `gossip-node` do **not** use it). The gateway itself treats an empty value as "auth disabled" (any request accepted with no token), but these Compose files reject an empty value, so a node never starts with auth off by mistake; any **non-empty** value becomes a hard, single accepted Bearer (not "any string"). Generate it with e.g. `openssl rand -hex 32` |
 | `GATEWAY_TLS_ENABLED` | gateway | No | `true` | Enable TLS termination (set false to disable) |
 | `GATEWAY_TLS_CERT` / `GATEWAY_TLS_KEY` | gateway | No | `/etc/gateway/certs/server.crt` / `.key` | TLS cert/key paths (mounted from `./secrets`). **Production/cross-org:** use a public cert (Let's Encrypt). **Isolated/own-party deployment:** self-signed is fine (see the gateway README for the distinction) |
 | `GATEWAY_AUTH_CBOR_ENABLED` | gateway | No | `true` | CBOR auth-token verification (collapsed from auth-service) |
-| `GATEWAY_METRICS_ENABLED` | gateway | No | `true` | Enable `/metrics` endpoint |
+| `GATEWAY_METRICS_ENABLED` | gateway | No | `true` | Enable `/metrics` endpoint; `false` removes the route |
+| `GATEWAY_METRICS_TOKEN` / `GATEWAY_METRICS_TOKEN_FILE` | gateway | No | — | Bearer token `/metrics` requires. With gateway auth on and no token, the gateway doesn't serve `/metrics`; see [docs/setup-vps.md, "`/metrics`"](docs/setup-vps.md#25-metrics) |
+| `GATEWAY_PEER_TLS_INSECURE` | gateway | — | `false` in production, `true` in development | Skip TLS verification of peer gateways. Set in each overlay, not read from `.env` |
+| `GATEWAY_PEER_CA_CERT` | gateway | No | — | PEM CA bundle to verify peer gateways on a private CA |
 | `GATEWAY_HEALTH_BACKENDS` | gateway | No | `sead-core,edge-service,storage,source-data` | Backends the gateway `/health` probes |
 | `SVC_SEAD_CORE_GRPC` | gateway | No | `sead-core:50051` | sead-core gRPC target |
 | `SVC_EDGE_SERVICE_GRPC` | gateway | No | `edge-service:50055` | edge-service gRPC target |

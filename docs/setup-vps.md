@@ -18,7 +18,7 @@ and reaches the VPS gateway over the network as in real world deployments.
 ```mermaid
 graph TB
     subgraph "Remote VPS"
-        subgraph "SEAD stack (sead-network)"
+        subgraph "SEAD stack (public and backend networks)"
             GW[gateway :30080]
             SC[sead-core :50051 gRPC]
             ES[edge-service :50055 gRPC]
@@ -63,25 +63,86 @@ graph TB
 
 ---
 
-## 2. Ports to open on the VPS firewall
+## 2. Network exposure
 
-> These are the **host** ports that must be reachable from outside. The
-> internal gRPC ports (`50051`–`50055`) stay private to the Docker network
-> and are **not** exposed directly.
+The Compose files ship a secure reference configuration. You own your node's
+configuration and operation: this section describes the reference, and the
+invariants to keep when you change it.
 
-| Port | Transport | Service | Who needs it |
+### 2.1 Reference configuration
+
+- **The gateway terminates TLS itself on `30080`**, with its certificate and
+  key mounted read-only from `./secrets` at `/etc/gateway/certs`. The Compose
+  files add no TLS front.
+- **Only `30080` (gateway) and `31002` (gossip-node) are published**, on all
+  interfaces. Every other port stays inside Docker.
+- **Two networks.** `backend` is internal: Docker gives it no route out of the
+  host. sead-core, edge-service and source-data-service are on `backend` alone.
+  The services that connect out, or that are reached from outside, are on
+  `public` as well:
+
+  | Service | Networks | Why it's on `public` |
+  |---|---|---|
+  | sead-core, edge-service, source-data-service | `backend` | — |
+  | pin-service | `backend`, `public` | connects out to the IPFS API |
+  | gateway | `backend`, `public` | serves `30080`, and fetches from the peer gateways in `GATEWAY_PEERS` |
+  | gossip-node | `backend`, `public` | serves and dials libp2p peers on `31002` |
+
+  `public` keeps the Docker name `sead-network`, so a Compose project that
+  attaches to `sead-network` as an external network, such as the Explorer in
+  [section 4](#4-deploy-the-explorer), still reaches the gateway by name. It
+  reaches nothing on `backend`.
+- **Production settings**, set as literal values in `compose.production.yaml`,
+  not read from `.env`:
+  - `GOSSIP_MDNS=false`: mDNS is link-local multicast, so on a Docker bridge it
+    finds no peer across the Internet; peers come from `GOSSIP_BOOTSTRAP`.
+  - `GOSSIP_DHT=true`: the DHT bootstraps only from `GOSSIP_BOOTSTRAP`, so it
+    discovers peers within the SEAD mesh, not on the public IPFS DHT.
+  - `GATEWAY_PEER_TLS_INSECURE=false`: the gateway verifies its peer gateways'
+    certificates. Use public certificates, or set `GATEWAY_PEER_CA_CERT` to a
+    PEM CA bundle for peers on a private CA.
+
+  `compose.development.yaml` turns mDNS on, lets the gateway accept self-signed
+  peer certificates, and makes `backend` non-internal so the gRPC ports it
+  publishes on `127.0.0.1` reach the services.
+
+CI checks the resolved production config and fails unless the published ports
+are exactly `30080` and `31002`, no port binds `127.0.0.1`, `backend` is
+`internal: true`, and the three settings above hold.
+
+### 2.2 Who reaches which port
+
+| Port | Transport | Service | Who reaches it |
 |---|---|---|---|
-| **80** | TCP | nginx (HTTP → HTTPS redirect) | everyone |
-| **443** | TCP | nginx (TLS: Explorer UI + API + gateway proxy) | everyone |
-| **30080** | TCP | gateway HTTPS API (cross-org event fetch, ingest, verify) | other SEAD nodes, brokers |
-| **31002** | TCP | gossip-node libp2p peer (frontier dissemination + event fetch) | other SEAD nodes |
+| **30080** | TCP, HTTPS | gateway API (event fetch, ingest, verify, health) | edge clients, brokers, explorers, and the federation peers that list this node in their `GATEWAY_PEERS` |
+| **31002** | TCP, libp2p | gossip-node (frontier dissemination, event fetch) | the other gossip-nodes of your own stack, and your federation partners' |
+| **80**, **443** | TCP | nginx, only if you run the proxy of [section 6](#6-nginx-reverse-proxy) | everyone |
 
-**Not exposed** (private to the Docker network): `50051` (sead-core),
-`50052` (storage-gateway), `50053` (source-data-service), `50054` (gateway
-Sync gRPC), `50055` (edge-service), `8086` (Explorer API — reachable only via
-nginx `/api`), `3000` (Explorer UI — reachable only via nginx `/`).
+**Not exposed** (inside Docker): `50051` (sead-core), `50053`
+(source-data-service), `50054` (gateway Sync gRPC), `50055` (edge-service),
+`50056` (pin-service), and the Explorer's `8086` and `3000`, reached only
+through nginx.
 
-### Firewall example (UFW)
+### 2.3 Exposure postures
+
+- **Open to all, with gateway authentication: supported.** This is the
+  reference. Every endpoint on `30080` except `/health` requires the gateway's
+  authentication (`SEAD_AUTH_SECRET`, edge tokens or CBOR auth tokens), and
+  gossip-node accepts libp2p connections from anyone, while which nodes may
+  act for an org is decided by the org's catalog and signatures
+  ([section 5.3](#53-who-gives-whom-a-bootstrap-entry)).
+- **A host-firewall allow-list: optional hardening.** If you know who reaches
+  each port, allow only them: for example, `31002` only from your federation
+  partners' nodes. Compose can't filter by source address, so this is the
+  host's job.
+
+> **Docker bypasses UFW for published ports.** Docker writes its own iptables
+> rules for `30080` and `31002`, which traffic reaches before UFW's `INPUT`
+> rules. `ufw deny` or `ufw allow from` therefore don't restrict them: filter
+> in the `DOCKER-USER` chain, or in your cloud provider's firewall.
+
+For the reference posture, open the ports in the cloud security group, and in
+UFW if the host runs it:
 
 ```bash
 sudo ufw allow 80/tcp
@@ -91,10 +152,64 @@ sudo ufw allow 31002/tcp
 sudo ufw enable
 ```
 
-> **Hardening (recommended):** `31002` (gossip-node libp2p) only needs
-> to be reachable by *other SEAD nodes*. If you know their IPs, restrict it
-> to those peers instead of opening it to the whole internet:
-> `sudo ufw allow from <peer-ip> to any port 31002 proto tcp`, etc.
+### 2.4 Behind a reverse proxy
+
+You may put a reverse proxy in front of the gateway, such as the nginx of
+[section 6](#6-nginx-reverse-proxy). It is your variant, not part of the
+reference, and it must keep two invariants:
+
+1. **The gateway port is reachable only through the proxy.** Clients that
+   reached `30080` reach the proxy instead, and the host stops `30080` from
+   outside, in the `DOCKER-USER` chain or the cloud firewall, or by binding it
+   to `127.0.0.1` in a Compose override file of your own. The production
+   overlay doesn't bind it there, since the reference serves `30080` directly.
+2. **The proxy filters `/metrics`:** it doesn't forward `/metrics` from
+   outside, or forwards it only from your monitoring hosts.
+
+`31002` stays exposed directly: it carries raw libp2p TCP, which an HTTP proxy
+such as nginx can't forward.
+
+### 2.5 `/metrics`
+
+From gateway `v0.1.0`, the image `compose.production.yaml` pins, `/metrics`
+needs a token:
+
+- set `GATEWAY_METRICS_TOKEN`, or `GATEWAY_METRICS_TOKEN_FILE` with a container
+  path under `/etc/gateway/certs`, and send it as `Authorization: Bearer
+  <token>`; without it, or with a wrong one, `/metrics` answers `401`;
+- with gateway authentication on, the default, and no token set, the gateway
+  doesn't serve `/metrics` at all: it answers `404` and logs a warning at
+  startup;
+- `GATEWAY_METRICS_ENABLED=false` removes the route: `404` whatever the token.
+
+The gateway logs its posture at startup as `metrics posture: token-gated`,
+`disabled` or `open`.
+
+On the gateway images before `v0.1.0`, `/metrics` answers on `30080` without
+authentication, whatever `GATEWAY_METRICS_ENABLED` says. It serves only the Go
+runtime and process metrics (`go_*`, `process_*`, `promhttp_*`), no SEAD data,
+so what it exposes is the Go version, restarts and traffic volume. A node on
+those images that runs a proxy filters `/metrics` there, and since a proxy on
+`443` doesn't cover `30080` itself, also stops `30080` from outside, as in
+[2.4](#24-behind-a-reverse-proxy).
+
+### 2.6 Upgrade notes
+
+- **`/metrics` loses its `go_*` and `process_*` series from gateway
+  `v0.1.0`.** The gateway now serves its own registry, not Go's default one, so
+  dashboards and alerts that read those series find nothing: move them to the
+  gateway's own metrics.
+- **`.env` no longer sets `GOSSIP_MDNS`, `GOSSIP_DHT` or
+  `GATEWAY_PEER_TLS_INSECURE`.** The overlays set them, and a value left in
+  `.env` has no effect. A node that relied on `GATEWAY_PEER_TLS_INSECURE=true`
+  for self-signed peers sets `GATEWAY_PEER_CA_CERT` instead, or gives its peers
+  public certificates.
+- **The stack moves from one network to two.** Run `docker compose down`, then
+  `docker compose up -d`, rather than `up -d` alone, so Compose recreates
+  `sead-network` with its new definition; some Compose versions refuse to
+  reuse it otherwise. `down` keeps the volumes, as long as you don't pass `-v`.
+  Stop any other project attached to `sead-network` first, such as an
+  Explorer on the same host, and start it again afterwards.
 
 ---
 
@@ -119,8 +234,8 @@ SEAD_AUTH_SECRET=<shared-secret>         # required in production
 ```
 
 > **`GOSSIP_BOOTSTRAP`** lists the other nodes' libp2p multiaddrs
-> (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); mDNS/DHT also auto-discover peers on
-> the same subnet. `GOSSIP_OBSERVE_ORGS` enables cross-node sync (the node
+> (`/ip4/<ip>/tcp/31002/p2p/<peerid>`); the DHT also discovers peers through
+> them. mDNS is off in production ([2.1](#21-reference-configuration)). `GOSSIP_OBSERVE_ORGS` enables cross-node sync (the node
 > subscribes to each listed org's `sead-sync/{org}` topic).
 >
 > **Networking vs. authority — four layers.** Reachability and bootstrap are *transport
@@ -173,8 +288,10 @@ curl http://127.0.0.1:8086/health
 curl http://127.0.0.1:3000/
 ```
 
-Because the Explorer runs on the **same VPS** as the stack, its `.env` uses the
-internal Docker-network URLs (via the gateway):
+Because the Explorer runs on the **same VPS** as the stack, it attaches to
+`sead-network`, the stack's `public` network, and its `.env` reaches the gateway
+by name. It can't reach the services on `backend`
+([2.1](#21-reference-configuration)):
 
 ```bash
 SEAD_CORE_URL=http://gateway:30080
@@ -217,8 +334,9 @@ libp2p multiaddrs also support DNS:
 ```
 
 The peer dialed this way becomes a **transport-level entry point** (layer 1–2) — it has no
-org meaning by itself. mDNS and DHT are also available to auto-discover peers on the same
-subnet; `GOSSIP_BOOTSTRAP` is the deterministic static-seed path. Once connected, the node
+org meaning by itself. The DHT also discovers peers once the node is connected, and in
+development mDNS finds peers on the same subnet; `GOSSIP_BOOTSTRAP` is the deterministic
+static-seed path. Once connected, the node
 retrieves the observed orgs' catalogs over the mesh.
 
 ### 5.2 Getting `<PEERID>`
@@ -287,12 +405,14 @@ GOSSIP_OBSERVE_ORGS=<org_A_hex>,<org_B_hex>
 
 ## 6. Nginx reverse proxy
 
-Nginx terminates TLS on `443` and routes:
+This is the reverse-proxy variant of [2.4](#24-behind-a-reverse-proxy): keep
+its two invariants. Nginx terminates TLS on `443` and routes:
 
 - `/` → Explorer UI (nginx container on `3000`)
 - `/api` → Explorer API (FastAPI on `8086`)
 - `/ingest`, `/auth/verify` → gateway (`30080`) — **for remote brokers**
 - `/health` → gateway health (optional)
+- `/metrics` → nothing: nginx answers `404`
 
 ### 6.1 Install + TLS
 
@@ -364,6 +484,11 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ── Gateway metrics: never forwarded from outside ───────────────────
+    location = /metrics {
+        return 404;
     }
 
     # ── Gateway health (optional, unauthenticated) ──────────────────────
