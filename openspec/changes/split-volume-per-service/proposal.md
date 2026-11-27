@@ -64,7 +64,7 @@ threatens the key index.
   dirty flag with no content change. The runbook still starts with a verification step, but it is a
   check, not a merge.
 - **The key files already exist on both edges.** `~/stardome-sead/keys/` holds `edge_sign.hex`,
-  `org_sign.hex`, `org_pub.hex`, mode `0400`, owned `syslog:syslog` (100:101), and `.env` already
+  `org_sign.hex`, `org_pub.hex`, mode `0400`, owned `10001:10001`, and `.env` already
   sets `EDGE_SIGNING_KEY_FILE` / `EDGE_ORG_SIGNING_KEY_FILE` / `EDGE_ORG_PUBLIC_KEY_FILE` to them.
   So the #37 secrets prerequisite is satisfied; the runbook verifies it rather than creating it.
 - **`keys/` is gitignored on `origin/main` but not in the edges' `dcd5fa3` `.gitignore`.** The entry

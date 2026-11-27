@@ -117,7 +117,7 @@ volume, hand it back to the service user, restart:
 docker compose stop
 MP=$(docker volume inspect -f '{{ .Mountpoint }}' stardome-sead_sead_core_data)
 sudo cp /var/backups/sead/<timestamp>/sead.db "$MP/sead.db"
-sudo chown 100:101 "$MP/sead.db"          # syslog:syslog — the service user
+sudo chown 10001:10001 "$MP/sead.db"      # the image user, scripts/image-user.env
 sudo sqlite3 "$MP/sead.db" 'PRAGMA integrity_check;'   # expect: ok
 docker compose up -d
 ```

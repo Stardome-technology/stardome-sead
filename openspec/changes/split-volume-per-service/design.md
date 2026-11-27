@@ -14,8 +14,8 @@ stardome-sead_sead_data/_data/
   sourcedata.db    (present, with -wal and -shm)
 ```
 
-Files are owned `syslog:syslog` on the host (uid 100:101), matching `user: "100:101"` in the
-production overlay.
+Files are owned `10001:10001` on the host, the image user that `scripts/image-user.env` declares
+and every service runs as since the move to the v0.1.0 user.
 
 Two facts that shape the design:
 
@@ -114,7 +114,7 @@ exist invites them to discard something else. Verify first, then act on what is 
 **Two related facts the runbook must state, both verified on both edges:**
 
 - **The key files already exist.** `~/stardome-sead/keys/` holds `edge_sign.hex`, `org_sign.hex`,
-  `org_pub.hex` at mode `0400`, owned `syslog:syslog` (100:101), and `.env` already points the
+  `org_pub.hex` at mode `0400`, owned `10001:10001`, and `.env` already points the
   three `EDGE_*_FILE` variables at them. The #37 secrets prerequisite is satisfied; the runbook
   verifies it rather than creating it.
 - **`?? keys/` is expected and must not be cleaned.** `keys/` is gitignored on `origin/main` but
@@ -151,7 +151,7 @@ The migration does **not** remove the orphan volume; it is documented as unused.
 
 1. Verify the working tree (D7) — `git diff --quiet origin/main -- compose.yaml compose.production.yaml`
    must be empty; clear the stale flag with `git checkout --`.
-2. Confirm the three key files exist and are readable by 100:101 (D7).
+2. Confirm the three key files exist and are readable by 10001:10001 (D7).
 3. `git pull`.
 4. Stop the stack.
 5. `docker volume create` the new per-service volumes (including the external `edge.db` one).

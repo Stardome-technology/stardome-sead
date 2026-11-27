@@ -24,7 +24,7 @@ service shows a distinct volume; `edge_data` shows `external: true`; the CI comp
 - [ ] 2.2 For each database: `PRAGMA wal_checkpoint(TRUNCATE)`, copy `db` + `-wal` + `-shm`, then
   `PRAGMA integrity_check` on the copy and a per-table row count compared to the source.
 - [ ] 2.3 After all copies verify, rename `sead_data/edge.db` to `sead_data/edge.db.migrated`.
-- [ ] 2.4 Preserve ownership `100:101` on the copied files.
+- [ ] 2.4 Preserve ownership `10001:10001`, read from `scripts/image-user.env`, on the copied files.
 - [ ] 2.5 Fail closed: any verification failure aborts before the rename, leaving the source intact.
 
 **Quality Gate:** run against a **copy** of the live volume: row counts identical per table for all
@@ -48,7 +48,7 @@ output contains no `edge.db`; the guard fires if `edge.db` is added to the list.
   a stale `edge.db` requires an edge key rotation; warn against `docker compose down -v`.
 - [ ] 4.2 New update runbook: verify the working tree (`git diff --quiet origin/main -- compose.yaml
   compose.production.yaml` must be empty; clear the stale flag with `git checkout --`) → confirm the
-  three key files exist and are readable by 100:101 → `git pull` → stop → create volumes → migrate
+  three key files exist and are readable by 10001:10001 → `git pull` → stop → create volumes → migrate
   (`--dry-run` first) → `up -d` → verify.
 - [ ] 4.3 Document the `docker volume create` step required on fresh nodes because `edge_data` is
   external.
@@ -66,7 +66,7 @@ no step assumes a systemd unit or an update script (there are none).
   next signature uses an index greater than the last one before the migration.
 - [ ] 5.3 Repeat on edge2.
 - [x] 5.4 Confirm `up` fails with a clear error on a node where the external volume is absent.
-- [ ] 5.5 Confirm the copied files keep ownership `100:101` (they are `syslog:syslog` on the host).
+- [ ] 5.5 Confirm the copied files keep ownership `10001:10001`, the image user.
 - [ ] 5.6 Confirm the gossip PeerId is unchanged across the migration (the identity key is not in
   `sead_data`, but the check costs nothing and catches an accidental volume swap).
 

@@ -67,7 +67,8 @@ do not re-create it:
 ls -l keys/edge_sign.hex keys/org_sign.hex keys/org_pub.hex
 ```
 
-Expect mode `0400`, owned `100:101` (`syslog:syslog`), and `.env` pointing
+Expect mode `0400`, owned `10001:10001` (the image user in
+`scripts/image-user.env`), and `.env` pointing
 `EDGE_SIGNING_KEY_FILE`, `EDGE_ORG_SIGNING_KEY_FILE` and
 `EDGE_ORG_PUBLIC_KEY_FILE` at those files.
 
@@ -75,9 +76,15 @@ Expect mode `0400`, owned `100:101` (`syslog:syslog`), and `.env` pointing
 
 ```bash
 git pull
+docker compose -f compose.yaml -f compose.production.yaml pull
 ```
 
 Clean after step 1. If it still conflicts, stop — step 1 missed something.
+
+`compose.production.yaml` pins each image by digest. The `pull` fetches the
+digests the new commit pins while the stack is still up, so a registry or
+network failure shows here, before step 5 stops anything, and the stop lasts
+only as long as the migration.
 
 ## 4. Record the pre-update edge key index
 
@@ -150,7 +157,8 @@ sudo scripts/migrate_volumes.sh
 
 What it does (design D2–D4): checkpoints each WAL, copies `db` + `-wal` +
 `-shm` to the per-service volume, verifies with `PRAGMA integrity_check` and
-per-table row counts, re-owns everything `100:101`, and only then renames the
+per-table row counts, re-owns everything to the image user in
+`scripts/image-user.env` (`10001:10001`), and only then renames the
 old `edge.db` to `edge.db.migrated` — nothing is deleted. It is idempotent (a
 second run is a no-op) and fails closed: any verification failure aborts
 **before** the rename with the source volume intact.
