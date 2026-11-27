@@ -28,8 +28,8 @@
 # Restarts and logs (see the README, "Restarts and logs"): every long-running
 # service merges the `x-runtime` block below, so it restarts unless stopped,
 # logs to the `local` driver with rotated, size-limited files, and gets 30 s to
-# stop before Docker kills it. edge-service merges the block but sets no restart
-# policy yet.
+# stop before Docker kills it. edge-service restarts too, since its signers
+# save their key index to `edge.db` before each signature leaves them.
 #
 # edge-service is in the `edge` profile, so it starts only once the node is
 # enrolled: after enrollment, set `COMPOSE_PROFILES=edge` in `.env` (see
@@ -67,9 +67,6 @@ services:
 
   edge-service:
     <<: *runtime
-    # No restart policy yet: a later change enables it, once edge-service's
-    # image saves the edge signer's key index.
-    restart: "no"
     # Starts only with the `edge` profile, once the node is enrolled: set
     # `COMPOSE_PROFILES=edge` in `.env`. Without it in `.env`, a `down` leaves
     # a running edge-service orphaned, and a later `up -d` keeps its old image

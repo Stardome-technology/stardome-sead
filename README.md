@@ -535,8 +535,10 @@ docker run --rm -u 0 \
 
 `compose.yaml` gives every long-running service, from one `x-runtime` block:
 
-- `restart: unless-stopped`, except on edge-service, which gets
-  `restart: "no"` until its image saves the edge signer's key index;
+- `restart: unless-stopped`, edge-service included, since its signers save
+  their key index before each signature leaves them, so a restart never
+  reuses a leaf (see
+  [XMSS key state persistence](#xmss-key-state-persistence-org-and-edge-keys));
 - the `local` log driver, keeping at most five 10 MB files per container;
 - `stop_grace_period: 30s`, so `docker compose stop` sends each service
   `SIGTERM` and kills it only after 30 s.
