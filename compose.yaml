@@ -21,9 +21,15 @@
 # pin-service, source-data-service, sead-sync) are gRPC-only and publish no
 # public HTTP ports. The Go gateway is the single public HTTPS entry point: it
 # terminates TLS, enforces auth, and routes to the internal services over the
-# shared `sead-network` bridge. `auth-service` and `verifier-service` are
-# collapsed into the gateway (no longer standalone services). pin-service is the
-# sole storage authority (AddToIPFS/RetrieveFromIPFS/ResolveCIDByPayloadHash).
+# `backend` network. `auth-service` and `verifier-service` are collapsed into
+# the gateway (no longer standalone services). pin-service is the sole storage
+# authority (AddToIPFS/RetrieveFromIPFS/ResolveCIDByPayloadHash).
+#
+# Networks (see docs/setup-vps.md, "Network exposure"): every service is on
+# `backend`, an internal network with no route out of the host. Only the
+# services that connect out or are reached from outside are also on `public`:
+# pin-service (to IPFS), gossip-node (libp2p on 31002) and the gateway (30080,
+# and its peer gateways). The only published ports are 30080 and 31002.
 #
 # Restarts and logs (see the README, "Restarts and logs"): every long-running
 # service merges the `x-runtime` block below, so it restarts unless stopped,
@@ -49,7 +55,7 @@ x-runtime: &runtime
 services:
   sead-core:
     <<: *runtime
-    # No public ports — gRPC-only, reachable on sead-network via the gateway
+    # No public ports — gRPC-only, on `backend` only, reached via the gateway
     volumes:
       - sead_data:/data
     environment:
@@ -63,7 +69,7 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      - sead-network
+      - backend
 
   edge-service:
     <<: *runtime
@@ -72,7 +78,7 @@ services:
     # a running edge-service orphaned, and a later `up -d` keeps its old image
     # and environment.
     profiles: [edge]
-    # No public ports — gRPC-only, reachable on sead-network via the gateway
+    # No public ports — gRPC-only, on `backend` only, reached via the gateway
     volumes:
       - sead_data:/data
     # The three keys come from host files as Compose secrets (top-level
@@ -153,12 +159,13 @@ services:
       # the 45 s that three failed checks at a 15 s interval allow.
       start_period: 60s
     networks:
-      - sead-network
+      - backend
 
   pin-service:
     <<: *runtime
     # No public ports — gRPC-only, sole storage authority (AddToIPFS,
-    # RetrieveFromIPFS, ResolveCIDByPayloadHash); reachable on sead-network.
+    # RetrieveFromIPFS, ResolveCIDByPayloadHash); reached on `backend`, and on
+    # `public` too, since it connects out to the IPFS API.
     volumes:
       - sead_data:/data
     environment:
@@ -175,11 +182,12 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      - sead-network
+      - public
+      - backend
 
   source-data-service:
     <<: *runtime
-    # No public ports — gRPC-only, reachable on sead-network via the gateway
+    # No public ports — gRPC-only, on `backend` only, reached via the gateway
     volumes:
       - sead_data:/data
     environment:
@@ -195,12 +203,13 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      - sead-network
+      - backend
 
   gossip-node:
     <<: *runtime
     # Option A (C2): own libp2p peer per node.
-    # - On the sead-network bridge so it reaches sead-core/gateway by name.
+    # - On `backend` so it reaches sead-core/gateway by name, and on `public`
+    #   for its libp2p peers.
     # - Publish the libp2p TCP port so other POCs reach this peer at the node's
     #   LAN/mesh IP (e.g. /ip4/192.168.60.1/tcp/31002 and mDNS).
     # - Persistent identity key (bind-mounted host directory) keeps the PeerId
@@ -246,8 +255,11 @@ services:
       - GOSSIP_CORE=${GOSSIP_CORE:-sead-core:50051}
       - GOSSIP_GATEWAY=${GOSSIP_GATEWAY:-gateway:50054}
       - GOSSIP_EDGE=${GOSSIP_EDGE:-edge-service:50055}
-      - GOSSIP_MDNS=${GOSSIP_MDNS:-true}
-      - GOSSIP_DHT=${GOSSIP_DHT:-true}
+      # GOSSIP_MDNS and GOSSIP_DHT are set as literal values in each overlay,
+      # not from `.env`: production turns mDNS off, development keeps it on.
+      # gossip-node reads both from its environment from v0.1.0, and the
+      # command below passes no --mdns or --dht flag, since a flag would
+      # override the environment.
       - GOSSIP_PNET=${GOSSIP_PNET:-false}
       - GOSSIP_IDENTITY_KEY_FILE=${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}
     # Override the image ENTRYPOINT ("gossip-node") so the `command` wrapper below
@@ -256,12 +268,13 @@ services:
     # at the first non-flag arg ("sh"), and the binary boots with defaults
     # (relay-only + port 9001), never receiving --own-org/--orgs/--listen.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ARGS=\"--own-org ${GOSSIP_ORG_ID:?} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --edge ${GOSSIP_EDGE:-edge-service:50055} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --mdns=${GOSSIP_MDNS:-true} --dht=${GOSSIP_DHT:-true} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_OBSERVE_ORGS:-}\" ] && ARGS=\"$$ARGS --orgs ${GOSSIP_OBSERVE_ORGS:-}\"; [ -n \"${GOSSIP_BOOTSTRAP:-}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP:-}\"; [ -n \"${GOSSIP_ADVERTISE:?}\" ] && ARGS=\"$$ARGS --advertise ${GOSSIP_ADVERTISE:?}\"; [ \"${GOSSIP_PNET:-false}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
+    command: ["ARGS=\"--own-org ${GOSSIP_ORG_ID:?} --listen ${GOSSIP_LISTEN:-/ip4/0.0.0.0/tcp/31002} --core ${GOSSIP_CORE:-sead-core:50051} --gateway ${GOSSIP_GATEWAY:-gateway:50054} --edge ${GOSSIP_EDGE:-edge-service:50055} --heartbeat ${GOSSIP_HEARTBEAT_SEC:-10} --identity-key-file ${GOSSIP_IDENTITY_KEY_FILE:-/data/gossip-keys/gossip-identity.key}\"; [ -n \"${GOSSIP_OBSERVE_ORGS:-}\" ] && ARGS=\"$$ARGS --orgs ${GOSSIP_OBSERVE_ORGS:-}\"; [ -n \"${GOSSIP_BOOTSTRAP:-}\" ] && ARGS=\"$$ARGS --bootstrap ${GOSSIP_BOOTSTRAP:-}\"; [ -n \"${GOSSIP_ADVERTISE:?}\" ] && ARGS=\"$$ARGS --advertise ${GOSSIP_ADVERTISE:?}\"; [ \"${GOSSIP_PNET:-false}\" = \"true\" ] && ARGS=\"$$ARGS --pnet\"; exec gossip-node $$ARGS"]
     depends_on:
       gateway:
         condition: service_healthy
     networks:
-      - sead-network
+      - public
+      - backend
 
   gateway:
     <<: *runtime
@@ -312,10 +325,10 @@ services:
       - GATEWAY_PEERS=${GATEWAY_PEERS:-}
       - GATEWAY_PEER_TOKEN=${GATEWAY_PEER_TOKEN:-}
       - GATEWAY_PEER_TOKEN_FILE=${GATEWAY_PEER_TOKEN_FILE:-}
-      # Peer gateway TLS: set GATEWAY_PEER_TLS_INSECURE=true only for
-      # isolated/own-party deployments using self-signed certs; or set
-      # GATEWAY_PEER_CA_CERT to a PEM CA bundle for a private CA.
-      - GATEWAY_PEER_TLS_INSECURE=${GATEWAY_PEER_TLS_INSECURE:-false}
+      # Peer gateway TLS: GATEWAY_PEER_TLS_INSECURE is set as a literal value
+      # in each overlay, not from `.env`: false in production, true in
+      # development for self-signed peers. For peers on a private CA, set
+      # GATEWAY_PEER_CA_CERT to a PEM CA bundle.
       - GATEWAY_PEER_CA_CERT=${GATEWAY_PEER_CA_CERT:-}
     # NOTE: edge-service is intentionally NOT a hard dependency here.
     # On a blank node edge-service fails-fast until an edge_authorization is
@@ -340,7 +353,8 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      - sead-network
+      - public
+      - backend
 
 volumes:
   sead_data:
@@ -361,7 +375,15 @@ secrets:
   org_public_key:
     file: ${EDGE_ORG_PUBLIC_KEY_FILE:?}
 
+# `public` keeps the Docker name `sead-network`, which this stack's network had
+# before the split, so a Compose project that attaches to `sead-network` as an
+# external network, such as an Explorer on the same host, still reaches the
+# gateway by name, and reaches nothing on `backend`.
+# `backend` is internal: Docker gives it no route out of the host.
 networks:
-  sead-network:
+  public:
     name: sead-network
     driver: bridge
+  backend:
+    driver: bridge
+    internal: true
